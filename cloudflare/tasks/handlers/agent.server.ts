@@ -73,6 +73,33 @@ async function session(c: TaskContext, readOnly = false) {
   return openToolSession({ userId: c.task.user_id, projectId: c.task.project_id!, taskId: c.task.id, confirmed: true, readOnly });
 }
 
+async function saveMessage(c: TaskContext, role: "user" | "assistant", content: string): Promise<Message> {
+  const { d1 } = await import("@backend/d1");
+  const { publish } = await import("@realtime/publish.server");
+  const pid = c.task.project_id!;
+  await d1("INSERT OR IGNORE INTO conversations (id, project_id) VALUES (?, ?)", [pid, pid]);
+  const [row] = await d1<{ id: string; created_at: string }>("INSERT INTO messages (id, conversation_id, role, content) VALUES (?, ?, ?, ?) RETURNING id, created_at", [crypto.randomUUID(), pid, role, content]);
+  const m: Message = { id: row!.id, projectId: pid, role, content, createdAt: row!.created_at, version: 1 };
+  await publish(c.task.user_id, "message", "upsert", m.id, 1, m);
+  return m;
+}
+async function say(c: TaskContext, st: State, text: string, role: "user" | "assistant" = "assistant") {
+  const m = await saveMessage(c, role, text);
+  await c.emit("message", { messageId: m.id, round: st.round ?? 0 });
+}
+const phase = (c: TaskContext, name: string) => c.emit("phase", { phase: name });
+
+/** Emits action.started, runs the work, then emits the completed/failed action with its real result. */
+async function act<T>(c: TaskContext, st: State, a: { kind: string; running: string; done: string; failed?: string; round?: number }, work: () => Promise<{ ok: boolean; result?: T; error?: string; done?: string }> | { ok: boolean; result?: T; error?: string; done?: string }) {
+  const id = `${c.task.id}-a${(st.n = (st.n ?? 0) + 1)}`;
+  const round = a.round ?? st.round ?? 0;
+  await c.emit("action.started", { id, round, kind: a.kind, title: a.running, target: null });
+  let r: { ok: boolean; result?: T; error?: string; done?: string };
+  try { r = await work(); } catch (e) { r = { ok: false, error: e instanceof Error ? e.message : String(e) }; }
+  await c.emit("action", { id, round, kind: a.kind, title: r.ok ? (r.done ?? a.done) : (a.failed ?? a.running), target: null, ok: r.ok, error: r.ok ? null : (r.error ?? "Failed").slice(0, 600) });
+  return { id, ...r };
+}
+
 /** Stop takes effect while the model is still answering: poll the persisted cancel flag alongside the call. */
 async function withCancel<T>(c: TaskContext, p: Promise<T>): Promise<T | null> {
   let poll: ReturnType<typeof setTimeout> | undefined;
