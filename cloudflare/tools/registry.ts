@@ -7,6 +7,11 @@ const tools = new Map<string, ToolDefinition>();
 type Def<S extends z.ZodTypeAny> = Omit<ToolDefinition<S>, "requiredPermissions" | "projectScoped" | "readOnly" | "destructive" | "requiresConfirmation" | "prerequisites" | "timeoutMs" | "retryPolicy" | "supportsParallelExecution" | "idempotent" | "purpose" | "capabilities"> &
   Partial<Pick<ToolDefinition<S>, "requiredPermissions" | "projectScoped" | "readOnly" | "destructive" | "requiresConfirmation" | "prerequisites" | "timeoutMs" | "retryPolicy" | "supportsParallelExecution" | "idempotent" | "purpose" | "capabilities">>;
 
+/** Tool factory with shared defaults (category, permissions…) that keeps per-tool argument typing. */
+export function group(defaults: Partial<Def<z.ZodTypeAny>> & { category: Category }) {
+  return <S extends z.ZodTypeAny>(d: Omit<Def<S>, "category"> & { category?: Category }) => defineTool<S>({ ...defaults, ...d } as unknown as Def<S>);
+}
+
 /** Defines a tool with safe defaults: read-only, project-scoped, 20 s timeout, no retry. */
 export function defineTool<S extends z.ZodTypeAny>(d: Def<S>): ToolDefinition<S> {
   const readOnly = d.readOnly ?? !(d.destructive ?? false);

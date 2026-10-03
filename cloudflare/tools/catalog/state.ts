@@ -1,9 +1,9 @@
 // State/history, snapshots, planning and agent-knowledge tools — all persisted in D1 (main + sandbox revisions).
-import { defineTool } from "../registry";
+import { defineTool, group } from "../registry";
 import { z, ToolFailure, detect } from "./util";
 
 const SAFE_META = ["description", "title", "icon", "language", "notes", "framework", "gitBranch"] as const;
-const st = (d: Parameters<typeof defineTool>[0]) => defineTool({ category: "state", ...d });
+const st = group({ category: "state" });
 
 export const stateTools = [
   st({
@@ -86,7 +86,7 @@ async function savePlan(id: string, steps: PlanStep[], status?: string) {
   return done;
 }
 const progress = (steps: PlanStep[]) => ({ total: steps.length, done: steps.filter((s) => s.status === "done").length, next: steps.findIndex((s) => s.status === "pending" || s.status === "in_progress") });
-const plan = (d: Parameters<typeof defineTool>[0]) => defineTool({ category: "planning", requiredPermissions: ["task:manage"], ...d });
+const plan = group({ category: "planning", requiredPermissions: ["task:manage"] });
 
 export const planningTools = [
   plan({
@@ -150,7 +150,7 @@ export const planningTools = [
 ];
 
 // ---------------- knowledge ----------------
-const kn = (d: Parameters<typeof defineTool>[0]) => defineTool({ category: "knowledge", ...d });
+const kn = group({ category: "knowledge" });
 const KIND = z.enum(["decision", "learning", "context"]);
 export const knowledgeTools = [
   kn({

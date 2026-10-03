@@ -1,6 +1,6 @@
 // Git / version control tools: real GitHub Git Data API calls on the repository linked to this project,
 // using the owner's own GitHub connection. The working copy is the project's revisioned file store.
-import { defineTool } from "../registry";
+import { defineTool, group } from "../registry";
 import { z, ToolFailure, gh, linkedRepo, blobSha, unifiedDiff, visible, write, remove, ASSET_EXT } from "./util";
 import type { ToolEnv } from "../types";
 
@@ -39,7 +39,7 @@ async function remoteText(env: ToolEnv, full: string, branch: string, path: stri
   return r.content ? decodeURIComponent(escape(atob(r.content.replace(/\n/g, "")))) : "";
 }
 
-const git = (d: Parameters<typeof defineTool>[0]) => defineTool({ category: "git", requiredPermissions: ["git:read"], prerequisites: ["repo_linked", "github_auth"], timeoutMs: 30_000, ...d });
+const git = group({ category: "git", requiredPermissions: ["git:read"], prerequisites: ["repo_linked", "github_auth"], timeoutMs: 30_000 });
 
 export const gitTools = [
   git({

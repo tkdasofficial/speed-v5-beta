@@ -1,12 +1,12 @@
 // Code transformation and asset tools: atomic multi-edit patches, multi-file replace, formatting, templates,
 // and binary asset management in the project file store.
-import { defineTool } from "../registry";
+import { defineTool, group } from "../registry";
 import { z, ToolFailure, P, getFile, write, remove, safeToolPath, fetchJson, ASSET_EXT, TEXT_EXT, detect, visible } from "./util";
 import { validateFile } from "../../../sandbox/intelligence/validate";
 import type { MemoryFileStore } from "../../../sandbox/workspace/workspace";
 
 const diag = (s: MemoryFileStore, p: string) => validateFile(s, p).filter((d) => d.severity === "error").slice(0, 10);
-const tf = (d: Parameters<typeof defineTool>[0]) => defineTool({ category: "transform", readOnly: false, ...d });
+const tf = group({ category: "transform", readOnly: false });
 
 /** Whitespace normalization that never changes meaning: LF endings, no trailing spaces, one final newline; JSON re-indented. */
 function basicFormat(path: string, text: string) {
@@ -120,14 +120,13 @@ function dims(b64: string): { width: number; height: number } | null {
   if (b[0] === 0xff && b[1] === 0xd8) {
     for (let i = 2; i < b.length - 9;) { if (b[i] !== 0xff) { i++; continue; } const m = b[i + 1]!; if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return { height: u16(i + 5), width: u16(i + 7) }; i += 2 + u16(i + 2); }
   }
-  if (b[8] === 0x57 && b[9] === 0x45 && b[12] === 0x56 && b[15] === 0x38) {
-    if (b[15] === 0x38 && b[14] === 0x50 && b[13] === 0x38 && String.fromCharCode(b[15]!) === "8" && b[16 - 1] && String.fromCharCode(b[15]) === "8") { /* VP8 */ }
+  if (String.fromCharCode(b[8]!, b[9]!, b[10]!, b[11]!) === "WEBP") {
     if (String.fromCharCode(b[12]!, b[13]!, b[14]!, b[15]!) === "VP8X") return { width: 1 + (b[24]! | (b[25]! << 8) | (b[26]! << 16)), height: 1 + (b[27]! | (b[28]! << 8) | (b[29]! << 16)) };
     if (String.fromCharCode(b[12]!, b[13]!, b[14]!, b[15]!) === "VP8 ") return { width: l16(26) & 0x3fff, height: l16(28) & 0x3fff };
   }
   return null;
 }
-const as = (d: Parameters<typeof defineTool>[0]) => defineTool({ category: "assets", ...d });
+const as = group({ category: "assets" });
 export const assetTools = [
   as({
     name: "list_assets", description: "Images, fonts, media and other binary assets in the project with sizes.", capabilities: ["images", "media files"],

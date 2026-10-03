@@ -29,3 +29,16 @@ export async function ensureSandboxDb(): Promise<string> {
   await migrate(id, `${import.meta.dir}/../migrations-sandbox`);
   return id;
 }
+
+/** Main database: applies pending cloudflare/migrations. Databases created before tracking existed get
+ *  001–009 recorded as applied (their tables are present), so only newer migrations run. */
+export async function migrateMain(id: string) {
+  await query(id, "CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at TEXT DEFAULT (datetime('now')))");
+  const tracked = (await query(id, "SELECT COUNT(*) AS n FROM _migrations"))[0]?.results?.[0]?.["n"];
+  const legacy = (await query(id, "SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'"))[0]?.results?.length;
+  if (!Number(tracked) && legacy) {
+    for (const f of readdirSync(`${import.meta.dir}/../migrations`).filter((x) => x.endsWith(".sql") && x < "010").sort())
+      await query(id, "INSERT OR IGNORE INTO _migrations (name) VALUES (?)", [f]);
+  }
+  await migrate(id, `${import.meta.dir}/../migrations`);
+}

@@ -162,6 +162,12 @@ async function route(req: Request, env: Env): Promise<Response> {
     try { return await (rt[1] === "source" ? p.serveSource(req, rt[2]!, rt[3]!) : p.acceptResult(req, rt[2]!, rt[3]!)); }
     catch (e) { return json({ error: e instanceof Error ? e.message : "Server error" }, e instanceof p.BuildError ? e.status : 500, {}); }
   }
+  const rj = /^\/runtime\/job\/(job_[\w]{1,64})\/(source|result)$/.exec(url.pathname);
+  if (rj && ((rj[2] === "source" && req.method === "GET") || (rj[2] === "result" && req.method === "POST"))) {
+    const j = await import("./build/jobs.server");
+    try { return await (rj[2] === "source" ? j.serveJob(req, rj[1]!) : j.acceptJob(req, rj[1]!)); }
+    catch (e) { return json({ error: e instanceof Error ? e.message : "Server error" }, e instanceof j.JobError ? e.status : 500, {}); }
+  }
   const pv = /^\/preview\/s\/([\w-]{1,600}\.[\w-]{20,100})(\/.*)?$/.exec(url.pathname);
   if (pv && (req.method === "GET" || req.method === "HEAD")) {
     if (!pv[2]) return new Response(null, { status: 301, headers: { Location: `${url.pathname}/${url.search}` } });
