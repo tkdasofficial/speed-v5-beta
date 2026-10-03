@@ -1,17 +1,12 @@
 {
-  "include": [
-    "src/**/*.ts",
-    "src/**/*.tsx",
-    "vite.config.ts",
-    "vitest.config.ts",
-    "eslint.config.js"
-  ],
+  "exclude": ["cloudflare/real-time/worker/**", "cloudflare/functions/deploy.ts", "cloudflare/secrets-store.ts", "**/*.test.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "cloudflare/security/**/*.ts", "cloudflare/real-time/**/*.ts", "shell/**/*.ts", "cloudflare/functions/**/*.ts", "vite.config.ts", "eslint.config.js", "sandbox/**/*.ts", ".output.build.ts"],
   "compilerOptions": {
     "target": "ES2022",
     "jsx": "react-jsx",
     "module": "ESNext",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["vite/client", "vitest/globals"],
+    "types": ["vite/client"],
 
     "moduleResolution": "Bundler",
     "allowImportingTsExtensions": true,
@@ -30,7 +25,12 @@
     "exactOptionalPropertyTypes": true,
     "noUncheckedSideEffectImports": true,
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@security/*": ["./cloudflare/security/*"],
+      "@realtime/*": ["./cloudflare/real-time/*"],
+      "@shell/*": ["./shell/*"],
+      "@backend/*": ["./cloudflare/functions/*"],
+      "@sandbox/*": ["./sandbox/*"]
     }
   }
 }

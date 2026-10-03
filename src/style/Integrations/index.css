@@ -1,0 +1,17 @@
+/* Integration-only extensions belong here; shared controls and rows are owned by PageShell. */
+.ig-grid{list-style:none;margin:0;padding:0;display:grid;gap:12px;grid-template-columns:1fr}
+@media (min-width:900px){.ig-grid{grid-template-columns:1fr 1fr}}
+.ig-card{border:1px solid var(--border);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:12px;background:var(--card)}
+.ig-head{display:flex;align-items:center;gap:12px}
+.ig-title{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.ig-title b{font-weight:600;font-size:15px}
+.ig-title span{font-size:13px;color:var(--muted-foreground)}
+.ig-spin{width:18px;height:18px;color:var(--muted-foreground)}
+.ig-accounts{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.ig-account{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:10px}
+.ig-acc-text{display:flex;flex-direction:column;gap:2px;min-width:0}
+.ig-acc-text b{font-weight:500;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px}
+.ig-acc-actions{display:flex;gap:8px}
+.ig-add{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:#1D4ED8;background:none;border:0;padding:0;cursor:pointer;align-self:flex-start}
+.ig-add:disabled{opacity:.5}
+.ig-add svg,.ig-inline{width:14px;height:14px;display:inline}

@@ -1,0 +1,12 @@
+.workspace-preview-button {
+  border-color: var(--foreground);
+  background: var(--foreground);
+  color: var(--background);
+  box-shadow: 0 10px 28px color-mix(in oklab, var(--foreground) 18%, transparent);
+}
+
+.workspace-preview-button:hover {
+  border-color: var(--foreground);
+  background: color-mix(in oklab, var(--foreground) 88%, var(--background));
+  color: var(--background);
+}

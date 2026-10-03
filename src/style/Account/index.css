@@ -1,0 +1,9 @@
+/* Account and legal pages */
+.account-card{display:flex;align-items:center;gap:12px;padding:18px;border:1px solid var(--border);border-radius:6px;background:var(--card)}
+.account-card .account-avatar{width:42px;height:42px;display:grid;place-items:center;border-radius:6px;background:var(--primary);color:var(--primary-foreground);font-size:13px;font-weight:700}
+.account-card b{font-size:15px;font-weight:600}
+.account-note{margin:0;color:var(--muted-foreground);font-size:13px;line-height:1.65}
+
+.sp-page .account-card { display: flex; align-items: center; gap: 14px; padding: 18px; border: 1px solid var(--border); border-radius: 18px; background: linear-gradient(180deg, var(--card), var(--background)); font-size: 18px; font-weight: 700; }
+.sp-page .account-avatar { width: 56px; height: 56px; display: grid; place-items: center; border-radius: 16px; background: var(--primary); font-size: 18px; font-weight: 800; box-shadow: 0 16px 40px -18px var(--primary); }
+.sp-page .account-note { margin: 0; padding: 16px 18px; border: 1px dashed var(--border); border-radius: 16px; font-size: 14.5px; line-height: 1.6; color: var(--muted-foreground); }

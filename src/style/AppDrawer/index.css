@@ -1,0 +1,250 @@
+.speed-sidebar {
+  --sidebar-control: 36px;
+  width: 238px;
+  min-width: 238px;
+  height: 100dvh;
+  padding: 7px;
+  border-right: 1px solid var(--border);
+  background: var(--background);
+  color: var(--foreground);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.speed-sidebar__header {
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  padding: 0 2px 4px;
+}
+
+.speed-sidebar__brand,
+.speed-sidebar__header-actions,
+.speed-sidebar__account-main {
+  display: flex;
+  align-items: center;
+}
+
+.speed-sidebar__brand {
+  min-width: 0;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.speed-sidebar__brand .speed-logo {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 5px;
+}
+
+.speed-sidebar__header-actions { gap: 2px; }
+
+.speed-sidebar__icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted-foreground);
+}
+
+.speed-sidebar__icon:hover,
+.speed-sidebar__icon[aria-expanded="true"] {
+  background: var(--accent);
+  color: var(--foreground);
+}
+
+.speed-sidebar__icon svg { width: 17px; height: 17px; }
+
+.speed-sidebar__search-row {
+  height: 38px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 5px;
+  padding-left: 10px;
+  border: 1px solid color-mix(in oklab, var(--primary) 40%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--primary) 7%, var(--card));
+  box-shadow: 0 12px 32px color-mix(in oklab, var(--primary) 10%, transparent);
+}
+
+.speed-sidebar__search-row > svg { color: var(--primary); width: 16px; }
+.speed-sidebar__search-row input { min-width: 0; border: 0; outline: 0; background: transparent; color: var(--foreground); font-size: 13px; }
+.speed-sidebar__search-row input::placeholder { color: var(--muted-foreground); }
+
+.speed-sidebar__workspace-wrap,
+.speed-sidebar__account-wrap,
+.speed-sidebar__project { position: relative; }
+
+.speed-sidebar__workspace {
+  width: 100%;
+  height: 38px;
+  margin: 3px 0 5px;
+  padding: 0 8px;
+  display: grid;
+  grid-template-columns: 27px minmax(0, 1fr) 15px;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--card) 82%, transparent);
+  text-align: left;
+}
+
+.speed-sidebar__workspace:hover,
+.speed-sidebar__workspace[aria-expanded="true"] { border-color: color-mix(in oklab, var(--primary) 45%, var(--border)); background: var(--card); }
+.speed-sidebar__workspace > svg { width: 14px; color: var(--muted-foreground); transition: transform .2s ease; }
+.speed-sidebar__workspace[aria-expanded="true"] > svg { transform: rotate(180deg); }
+.speed-sidebar__workspace-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+
+.speed-sidebar__avatar {
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 9px;
+  font-weight: 800;
+  box-shadow: 0 7px 18px color-mix(in oklab, var(--primary) 32%, transparent);
+}
+
+.speed-sidebar__new {
+  width: 100%;
+  height: 36px;
+  border: 1px solid var(--cta);
+  border-radius: 8px;
+  background: var(--cta);
+  color: var(--cta-foreground);
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 0 12px 28px color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+
+.speed-sidebar__new:hover { background: color-mix(in oklab, var(--cta) 90%, var(--background)); color: var(--cta-foreground); transform: translateY(-1px); }
+.speed-sidebar__new svg { width: 16px; }
+
+.speed-sidebar__nav { display: grid; gap: 1px; margin-top: 6px; }
+.speed-sidebar__nav-button,
+.speed-sidebar__project-open,
+.speed-sidebar__utility {
+  width: 100%;
+  height: 34px;
+  justify-content: flex-start;
+  gap: 9px;
+  padding: 0 10px;
+  border-radius: 7px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  font-weight: 500;
+}
+.speed-sidebar__nav-button:hover,
+.speed-sidebar__utility:hover,
+.speed-sidebar__project:hover { background: var(--accent); color: var(--foreground); }
+.speed-sidebar__nav-button.is-active { background: var(--card); color: var(--foreground); box-shadow: inset 0 0 0 1px var(--border); }
+.speed-sidebar__nav-button svg,
+.speed-sidebar__project-open svg,
+.speed-sidebar__utility svg { width: 17px; height: 17px; flex: 0 0 auto; }
+
+.speed-sidebar__section-head {
+  min-height: 24px;
+  margin-top: 5px;
+  padding: 0 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.speed-sidebar__section-head span:last-child { font-size: 9px; font-weight: 600; opacity: .72; }
+
+.speed-sidebar__projects { flex: 1; min-height: 70px; overflow-y: auto; display: grid; align-content: start; gap: 0; scrollbar-width: thin; }
+.speed-sidebar__project { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 28px 28px; align-items: center; border-radius: 7px; }
+.speed-sidebar__project-open { min-width: 0; overflow: hidden; }
+.speed-sidebar__project-open span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.speed-sidebar__project-actions { opacity: 0; }
+.speed-sidebar__project:hover .speed-sidebar__project-actions,
+.speed-sidebar__project-actions:focus-visible,
+.speed-sidebar__project-actions.is-pinned,
+.speed-sidebar__project-actions[aria-expanded="true"] { opacity: 1; }
+.speed-sidebar__project-actions.is-pinned { color: var(--primary); }
+.speed-sidebar__empty { margin: 8px 10px; color: var(--muted-foreground); font-size: 12px; }
+
+.speed-sidebar__account-wrap { padding-top: 4px; border-top: 1px solid var(--border); }
+.speed-sidebar__account { height: 42px; display: block; }
+.speed-sidebar__account-main { width: 100%; min-width: 0; height: 38px; justify-content: flex-start; gap: 7px; padding: 0 5px; border-radius: 8px; }
+.speed-sidebar__account-main:hover,
+.speed-sidebar__account-main[aria-expanded="true"] { background: var(--accent); }
+.speed-sidebar__account-copy { min-width: 0; display: grid; text-align: left; line-height: 1.25; }
+.speed-sidebar__account-copy b { overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.speed-sidebar__account-copy small { color: var(--muted-foreground); font-size: 9px; }
+.speed-sidebar__account-main > svg { margin-left: auto; width: 14px; color: var(--muted-foreground); transition: transform .2s ease; }
+.speed-sidebar__account-main > svg.is-open { transform: rotate(180deg); }
+
+.speed-sidebar__menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 80;
+  display: grid;
+  gap: 1px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 18px 48px color-mix(in oklab, var(--background) 78%, transparent);
+}
+.speed-sidebar__menu.is-up { top: auto; bottom: calc(100% + 5px); }
+.speed-sidebar__menu.is-project { left: auto; right: 0; width: 136px; top: 34px; }
+.speed-sidebar__menu button,
+.speed-sidebar__menu a { width: 100%; height: 31px; justify-content: flex-start; border-radius: 6px; font-size: 12px; }
+.speed-sidebar__menu button:hover,
+.speed-sidebar__menu a:hover { background: var(--accent); }
+.speed-sidebar__menu svg { width: 15px; }
+
+.speed-sidebar-backdrop { position: fixed; inset: 0; z-index: 60; background: color-mix(in oklab, var(--background) 72%, transparent); backdrop-filter: blur(6px); animation: speed-fade .2s ease both; }
+.speed-sidebar--mobile { width: min(88vw, 330px); min-width: 0; border-right-color: color-mix(in oklab, var(--primary) 22%, var(--border)); box-shadow: 22px 0 80px color-mix(in oklab, var(--background) 86%, transparent); animation: speed-slide .24s cubic-bezier(.22,.8,.25,1) both; }
+
+.speed-workspace-shell { width: 100%; height: 100dvh; display: flex; overflow: hidden; background: var(--background); }
+.speed-workspace-main { min-width: 0; flex: 1; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+
+@keyframes speed-fade { from { opacity: 0; } }
+@keyframes speed-slide { from { transform: translateX(-24px); opacity: .75; } }
+
+@media (max-width: 760px) {
+  .speed-sidebar--desktop { display: none; }
+  .speed-sidebar--mobile { padding: 7px 8px max(6px, env(safe-area-inset-bottom)); }
+  .speed-sidebar__header { height: 40px; padding-bottom: 4px; }
+  .speed-sidebar__brand .speed-logo { width: 30px; height: 30px; flex-basis: 30px; }
+  .speed-sidebar__workspace { margin-top: 2px; }
+  .speed-sidebar__new { height: 38px; }
+  .speed-sidebar__nav-button,
+  .speed-sidebar__project-open,
+  .speed-sidebar__utility { height: 36px; font-size: 13px; }
+  .speed-sidebar__section-head { margin-top: 4px; }
+  .speed-sidebar__account { height: 42px; }
+  .speed-sidebar__menu.is-project { position: fixed; left: min(calc(88vw - 148px), 172px); right: auto; top: 50%; width: 138px; transform: translateY(-50%); }
+}
+
+@media (min-width: 761px) {
+  .speed-sidebar-backdrop { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .speed-sidebar-backdrop,
+  .speed-sidebar--mobile { animation: none; }
+  .speed-sidebar__new,
+  .speed-sidebar__workspace > svg,
+  .speed-sidebar__account-main > svg { transition: none; }
+}

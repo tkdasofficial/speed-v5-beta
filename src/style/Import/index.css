@@ -1,0 +1,18 @@
+/* Import-only extensions belong here; shared flow surfaces are owned by PageShell. */
+.ip-block{display:flex;flex-direction:column;gap:10px;margin-bottom:18px}
+.ip-block h3{margin:0;font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--muted-foreground)}
+.ip-url{display:flex;gap:8px;align-items:center}
+.ip-url .sp-input{flex:1;min-width:0}
+.ip-url .sp-btn{height:42px}
+.ip-soon{display:flex;align-items:center;gap:8px;padding:12px 14px;border:1px dashed var(--border);border-radius:10px;font-size:13px;font-weight:500;color:var(--muted-foreground)}
+.ip-soon svg{width:15px;height:15px}
+.ip-scroll{max-height:360px;overflow-y:auto}
+.ip-busy{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted-foreground)}
+.ip-busy svg{width:15px;height:15px}
+.ip-tree{list-style:none;margin:10px 0 0;padding:6px;max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;background:var(--background)}
+.ip-tree li{display:flex;align-items:center;gap:6px;padding:4px 6px;font-size:12.5px;min-width:0}
+.ip-tree li svg{width:13px;height:13px;flex-shrink:0;color:var(--muted-foreground)}
+.ip-tree li span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ip-tree li em{font-style:normal;font-size:11px;color:var(--muted-foreground)}
+.ip-more{color:var(--muted-foreground)}
+.ip-note{font-size:12.5px;color:var(--muted-foreground);margin-top:6px}
