@@ -192,3 +192,11 @@ export async function deleteProjectFiles(projectId: string) {
     d.prepare("DELETE FROM sb_projects WHERE project_id = ?").bind(projectId),
   ]);
 }
+
+/** Per-file change history (newest first), optionally only revisions in (from, to]. Content is not returned. */
+export async function revisionChanges(projectId: string, o: { limit?: number; from?: number; to?: number; path?: string } = {}) {
+  return q<{ revision: number; path: string; node_type: string; op: string; label: string | null; task_id: string | null; created_at: string }>(
+    `SELECT revision, path, node_type, op, label, task_id, created_at FROM sb_revisions WHERE project_id = ?${o.from !== undefined ? " AND revision > ?" : ""}${o.to !== undefined ? " AND revision <= ?" : ""}${o.path ? " AND path = ?" : ""} ORDER BY revision DESC, id DESC LIMIT ?`,
+    [projectId, ...(o.from !== undefined ? [o.from] : []), ...(o.to !== undefined ? [o.to] : []), ...(o.path ? [o.path] : []), o.limit ?? 100],
+  );
+}
