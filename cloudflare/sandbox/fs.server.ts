@@ -177,6 +177,24 @@ export async function rollbackTo(projectId: string, target: number, meta: { task
   return commit(projectId, revision, before, store, { ...meta, label: `rollback to ${target}` });
 }
 
+/** Read-only reconstruction of the files as they were at `target` (nothing is written). */
+export async function storeAt(projectId: string, target: number) {
+  const { store, revision } = await loadStore(projectId);
+  if (target >= revision) return { store, revision };
+  const rows = await q<{ path: string; node_type: string; op: string; before_content: string | null; encoding: "utf8" | "base64" }>(
+    "SELECT path, node_type, op, before_content, encoding FROM sb_revisions WHERE project_id = ? AND revision > ? ORDER BY revision DESC, id DESC",
+    [projectId, target],
+  );
+  const changed = new Set<string>();
+  for (const r of rows) {
+    if (r.node_type === "folder") { if (r.op === "create") store.removeFolder(r.path); else if (r.op === "delete") store.addFolder(r.path); continue; }
+    changed.add(r.path);
+    if (r.op === "create") store.delete(r.path);
+    else store.set({ path: r.path, content: r.before_content ?? "", encoding: r.encoding, updatedAt: Date.now() });
+  }
+  return { store, revision: target, changedSince: [...changed] };
+}
+
 export async function listRevisions(projectId: string, limit = 50) {
   return q<{ revision: number; label: string | null; task_id: string | null; files: number; created_at: string }>(
     "SELECT revision, MAX(label) AS label, MAX(task_id) AS task_id, COUNT(*) AS files, MIN(created_at) AS created_at FROM sb_revisions WHERE project_id = ? GROUP BY revision ORDER BY revision DESC LIMIT ?",

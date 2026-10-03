@@ -2,14 +2,14 @@
 // Tools start an async job and return its jobId; get_command_result / wait_for_command read the real outcome.
 import { defineTool } from "../registry";
 import { z, ToolFailure } from "./util";
-import { resolveCommand } from "../policy";
+import { parseCommand } from "../policy";
 import type { ToolEnv } from "../types";
 
-type Kind = "install" | "build" | "typecheck" | "lint" | "test" | "format" | "script";
-async function start(env: ToolEnv, kind: Kind, script?: string) {
+type Kind = "install" | "build" | "typecheck" | "lint" | "test" | "format" | "script" | "command" | "dev";
+async function start(env: ToolEnv, kind: Kind, script?: string, extra: { argv?: string[]; timeoutSec?: number } = {}) {
   const j = await import("../../functions/build/jobs.server");
   try {
-    const r = await j.startJob(env.userId, env.projectId!, kind, { ...(script ? { script } : {}), operationId: env.operationId });
+    const r = await j.startJob(env.userId, env.projectId!, kind, { ...(script ? { script } : {}), ...extra, operationId: env.operationId });
     return { data: { ...r, note: "Runs asynchronously in an isolated runtime; call wait_for_command with this jobId." }, stateChanges: [{ kind: "task" as const, target: r.jobId, detail: `${kind} queued` }], next: "wait_for_command" };
   } catch (e) {
     if (e instanceof j.JobError) throw new ToolFailure(e.status === 409 ? "CONFLICT" : e.status === 503 ? "INTEGRATION_FAILED" : "COMMAND_FAILED", e.message, e.status >= 500);
@@ -28,7 +28,15 @@ async function read(env: ToolEnv, jobId: string) {
   return r;
 }
 const done = (s: string) => s === "succeeded" || s === "failed" || s === "expired";
-const shape = (r: Awaited<ReturnType<typeof read>>) => ({ ...r, output: (r.output ?? "").slice(-8000) });
+const shape = (r: Awaited<ReturnType<typeof read>>) => ({ ...r, output: (r.output ?? "").slice(-8000), stdout: r.stdout?.slice(-8000) ?? null, stderr: r.stderr?.slice(-8000) ?? null });
+const pause = (ms: number, signal?: AbortSignal) => new Promise<void>((res) => { const t = setTimeout(res, ms); signal?.addEventListener("abort", () => { clearTimeout(t); res(); }, { once: true }); });
+/** Polls a job until `stop(job)` holds or the deadline passes. */
+async function poll(env: ToolEnv, jobId: string, ms: number, stop: (r: Awaited<ReturnType<typeof read>>) => boolean) {
+  const until = Date.now() + ms;
+  let r = await read(env, jobId);
+  while (!stop(r) && Date.now() < until && !env.signal.aborted) { await pause(3000, env.signal); r = await read(env, jobId); }
+  return r;
+}
 
 export const execTools = [
   ex("install_dependencies", "install", "Run npm install in the isolated runtime and save the resulting package-lock.json.", ["npm install", "lockfile"]),
@@ -48,9 +56,20 @@ export const execTools = [
     },
   }),
   defineTool({
-    name: "run_command", category: "execution", description: "Run a shell-style command. Only safe, known commands are accepted (npm install/build/test/lint, tsc, npm run <script>, npm install <pkg>, git status/diff/log); each maps to its dedicated tool.", requiredPermissions: ["build:run"], capabilities: ["terminal", "shell"],
-    inputSchema: z.object({ command: z.string().min(1).max(200) }),
-    handler: async (a) => { const m = resolveCommand(a.command); return { data: { resolvedTool: m.tool, args: m.args ?? {} }, next: m.tool }; },
+    name: "run_command", category: "execution", requiredPermissions: ["build:run"], capabilities: ["terminal", "shell", "exec", "npx", "node"], timeoutMs: 115_000,
+    description: "Execute one command in this project's isolated GitHub runtime workspace and return its real stdout, stderr and exit code. No shell: allowed programs are npm (install/ci/run/test/ls/outdated/view/why/audit…), npx/bare project tools (tsc, vite, eslint, prettier, vitest, jest…) and node <project file>. Dependencies are installed (without install scripts) first. Waits up to waitSeconds; if still running, returns the jobId for wait_for_command.",
+    purpose: "Run an arbitrary safe command against the project's own files in a throwaway workspace.",
+    inputSchema: z.object({ command: z.string().min(1).max(500), timeoutSeconds: z.number().int().min(5).max(600).default(300), waitSeconds: z.number().int().min(0).max(100).default(90) }),
+    handler: async (a, env) => {
+      const parsed = parseCommand(a.command);
+      const started = await start(env, "command", undefined, { argv: [parsed.program, ...parsed.args], timeoutSec: a.timeoutSeconds });
+      const jobId = started.data.jobId;
+      const r = a.waitSeconds ? await poll(env, jobId, a.waitSeconds * 1000, (x) => done(x.status)) : await read(env, jobId);
+      const data = { ...shape(r), command: parsed.display, jobId };
+      if (!done(r.status)) return { data, warnings: ["Still running — call wait_for_command with this jobId."], stateChanges: started.stateChanges, next: "wait_for_command" };
+      if (r.status !== "succeeded") throw new ToolFailure(r.exitCode === 124 ? "TIMEOUT" : "COMMAND_FAILED", `${parsed.display} ${r.status === "expired" ? "expired before finishing" : `exited with code ${r.exitCode}`}`, false, data, "diagnose_failure");
+      return { data, stateChanges: started.stateChanges };
+    },
   }),
   defineTool({
     name: "get_command_result", category: "execution", description: "Status, exit code, output tail and diagnostics of a command job.",
@@ -69,8 +88,27 @@ export const execTools = [
     },
   }),
   defineTool({
-    name: "run_dev_server", category: "execution", description: "There is no long-running dev server; this builds the project and opens a live preview session instead.", requiredPermissions: ["build:run"],
-    inputSchema: z.object({}),
-    handler: async () => ({ data: { note: "Use run_production_build, then open_preview." }, next: "run_production_build" }),
+    name: "run_dev_server", category: "execution", requiredPermissions: ["build:run"], capabilities: ["dev server", "npm run dev", "vite dev", "start server"], timeoutMs: 115_000, readOnly: false, idempotent: false, supportsParallelExecution: false,
+    description: "Start the project's development server (npm run dev, Vite, or a static file server for plain HTML) as a tracked process in the isolated runtime. Waits for it to answer HTTP, returns the process jobId, startup logs and state. It runs at most 12 minutes; it is not the preview (use run_production_build + open_preview for that). Stop it early with cancel_operation{jobId}.",
+    purpose: "Check that the dev server starts and capture its startup logs.",
+    inputSchema: z.object({ startupTimeoutSeconds: z.number().int().min(15).max(180).default(90), waitSeconds: z.number().int().min(0).max(105).default(100) }),
+    handler: async (a, env) => {
+      const s = await env.files();
+      const pkg = s.get("package.json");
+      const p = pkg ? (JSON.parse(pkg.content) as { scripts?: Record<string, string>; dependencies?: Record<string, string>; devDependencies?: Record<string, string> }) : null;
+      const hasVite = !!(p?.dependencies?.["vite"] ?? p?.devDependencies?.["vite"]);
+      const how = p?.scripts?.["dev"] ? "npm run dev" : hasVite ? "vite" : s.get("index.html") ? "static server" : null;
+      if (!how) throw new ToolFailure("INVALID_ARGUMENT", "This project has no dev script, no Vite dependency and no index.html, so there is no dev server to start.", false, { supported: false });
+      const j = await import("../../functions/build/jobs.server");
+      const current = await j.latestDevServer(env.userId, env.projectId);
+      if (current && (current.status === "queued" || current.status === "running")) return { data: { ...shape(current), jobId: current.id, alreadyRunning: true }, warnings: ["A dev server is already running for this project."] };
+      const started = await start(env, "dev", undefined, { timeoutSec: a.startupTimeoutSeconds });
+      const jobId = started.data.jobId;
+      const r = a.waitSeconds ? await poll(env, jobId, a.waitSeconds * 1000, (x) => done(x.status) || x.phase === "ready" || x.phase === "failed") : await read(env, jobId);
+      const data = { detected: how, ...shape(r), jobId };
+      if (r.phase === "failed" || r.status === "failed" || r.status === "expired") throw new ToolFailure("COMMAND_FAILED", `Dev server failed to start (${how})`, false, data, "diagnose_failure");
+      if (r.phase !== "ready") return { data, warnings: ["Still starting — check again with get_command_result."], stateChanges: started.stateChanges, next: "get_command_result" };
+      return { data, stateChanges: [{ kind: "task", target: jobId, detail: "dev server ready" }] };
+    },
   }),
 ];

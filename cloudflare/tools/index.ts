@@ -8,12 +8,13 @@ import { stateTools, planningTools, knowledgeTools } from "./catalog/state";
 import { logTools, securityTools, cleanupTools, recoveryTools, integrationTools, orchestrationTools } from "./catalog/ops";
 import { transformTools, assetTools } from "./catalog/transform";
 import { execTools } from "./catalog/exec";
+import { buildArtifactTools, integrationControlTools, taskControlTools } from "./catalog/platform";
 import type { ToolDefinition } from "./types";
 
 let loaded = false;
 export function loadTools() {
   if (loaded) return allTools();
-  for (const t of [...fileTools, ...coreTools, ...gitTools, ...depTools, ...envTools, ...stateTools, ...planningTools, ...knowledgeTools, ...logTools, ...securityTools, ...cleanupTools, ...recoveryTools, ...integrationTools, ...orchestrationTools, ...transformTools, ...assetTools, ...execTools] as unknown as ToolDefinition[]) registerTool(t);
+  for (const t of [...fileTools, ...coreTools, ...gitTools, ...depTools, ...envTools, ...stateTools, ...planningTools, ...knowledgeTools, ...logTools, ...securityTools, ...cleanupTools, ...recoveryTools, ...integrationTools, ...orchestrationTools, ...transformTools, ...assetTools, ...execTools, ...buildArtifactTools, ...integrationControlTools, ...taskControlTools] as unknown as ToolDefinition[]) registerTool(t);
   loaded = true;
   return allTools();
 }

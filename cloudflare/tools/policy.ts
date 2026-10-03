@@ -26,7 +26,8 @@ export function checkPolicy(p: PolicyInput) {
     const v = args[k];
     if (v !== undefined && v !== p.projectId) throw new ToolFailure("SECURITY_BLOCKED", "Tools can only operate on the current project");
   }
-  if (tool.destructive && tool.requiresConfirmation && !p.confirmed && args["confirm"] !== true) {
+  const needsConfirm = (tool.destructive && tool.requiresConfirmation) || !!tool.requiresConfirmationFor?.(args);
+  if (needsConfirm && !p.confirmed && args["confirm"] !== true) {
     throw new ToolFailure("CONFIRMATION_REQUIRED", `${tool.name} is destructive — repeat the call with "confirm": true once the user agreed`, false, undefined, tool.name);
   }
 }
@@ -98,6 +99,53 @@ export function resolveCommand(cmd: string): { tool: string; args?: Record<strin
   if (script) return { tool: "run_script", args: { script: script[1] } };
   throw new ToolFailure("SECURITY_BLOCKED", `Unsupported command "${cmd.slice(0, 80)}". Supported: ${Object.keys(COMMAND_MAP).slice(0, 12).join(", ")}, npm install <pkg>`);
 }
+
+/** Executable command line: argv only (never a shell), allowlisted programs, workspace-relative arguments. */
+export interface ParsedCommand { program: "npm" | "npx" | "node"; args: string[]; display: string }
+const LOCAL_BINS = new Set(["tsc", "vite", "eslint", "prettier", "vitest", "jest", "tailwindcss", "postcss", "next", "astro", "svelte-check", "vue-tsc", "playwright"]);
+const NPM_SUBCOMMANDS = new Set(["install", "i", "ci", "run", "run-script", "test", "t", "ls", "list", "outdated", "view", "info", "explain", "why", "audit", "pack", "exec"]);
+const DENIED_FLAGS = /^(-g|--global|--prefix|--userconfig|--globalconfig|--cache|--registry|--unsafe-perm|--script-shell|--node-options|-r|--require|--import|--loader|--experimental-loader|-e|--eval|-p|--print|--inspect.*)(=|$)/;
+const ARG = /^[\w@%+=:,./^~-]+$/;
+export function tokenize(cmd: string): string[] {
+  const out: string[] = []; let cur = ""; let q: string | null = null; let any = false;
+  for (const ch of cmd.trim()) {
+    if (q) { if (ch === q) q = null; else cur += ch; continue; }
+    if (ch === '"' || ch === "'") { q = ch; any = true; continue; }
+    if (/\s/.test(ch)) { if (cur || any) out.push(cur); cur = ""; any = false; continue; }
+    cur += ch;
+  }
+  if (q) throw new ToolFailure("INVALID_ARGUMENT", "Unclosed quote in command");
+  if (cur || any) out.push(cur);
+  return out;
+}
+export function parseCommand(cmd: string): ParsedCommand {
+  if (/[;&|`$<>\n\r\\*?(){}]/.test(cmd)) throw new ToolFailure("SECURITY_BLOCKED", "Shell syntax (pipes, redirects, substitution, globs, chaining) is not allowed; run one command at a time");
+  const argv = tokenize(cmd);
+  if (!argv.length) throw new ToolFailure("INVALID_ARGUMENT", "Empty command");
+  if (argv.length > 24) throw new ToolFailure("INVALID_ARGUMENT", "Too many arguments");
+  let [prog, ...args] = argv as [string, ...string[]];
+  if (LOCAL_BINS.has(prog)) { args = [prog, ...args]; prog = "npx"; }
+  for (const a of args) {
+    if (!ARG.test(a) || a.length > 200) throw new ToolFailure("SECURITY_BLOCKED", `Argument "${a.slice(0, 40)}" contains characters that are not allowed`);
+    if (a.startsWith("/") || a.startsWith("~") || a.split(/[=/]/).includes("..")) throw new ToolFailure("SECURITY_BLOCKED", "Arguments must stay inside the project workspace (no absolute paths or ..)");
+    if (DENIED_FLAGS.test(a)) throw new ToolFailure("SECURITY_BLOCKED", `Flag ${a.split("=")[0]} is not allowed`);
+    if (/(^|\/)\.env(\.|$)|\.pem$|id_rsa/i.test(a)) throw new ToolFailure("SECURITY_BLOCKED", "Commands may not read secret files");
+  }
+  if (prog === "npm") {
+    const sub = args[0];
+    if (!sub || !NPM_SUBCOMMANDS.has(sub)) throw new ToolFailure("SECURITY_BLOCKED", `npm ${sub ?? ""} is not allowed. Allowed: ${[...NPM_SUBCOMMANDS].join(", ")}`);
+    if (sub === "exec" && !LOCAL_BINS.has(args[1] ?? "")) throw new ToolFailure("SECURITY_BLOCKED", "npm exec only runs the project's own tools");
+  } else if (prog === "npx") {
+    const bin = args.find((a) => !a.startsWith("-"));
+    if (!bin || !LOCAL_BINS.has(bin)) throw new ToolFailure("SECURITY_BLOCKED", `npx only runs installed project tools (${[...LOCAL_BINS].join(", ")})`);
+    args = ["--no-install", ...args.filter((a) => a !== "--no-install" && a !== "-y" && a !== "--yes")];
+  } else if (prog === "node") {
+    const file = args[0];
+    if (!file || !/^[\w./-]+\.(m?js|cjs)$/.test(file)) throw new ToolFailure("SECURITY_BLOCKED", "node can only run a project .js/.mjs/.cjs file");
+  } else throw new ToolFailure("SECURITY_BLOCKED", `"${prog}" is not an allowed program. Allowed: npm, npx <project tool>, node <project file>, ${[...LOCAL_BINS].slice(0, 6).join(", ")}`);
+  return { program: prog as ParsedCommand["program"], args, display: [prog, ...args].join(" ") };
+}
+
 
 // ---- network safety (SSRF) ----
 export function safeExternalUrl(raw: string): URL {

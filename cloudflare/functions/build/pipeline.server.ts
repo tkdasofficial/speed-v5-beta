@@ -331,3 +331,75 @@ async function servePreview(userId: string, projectId: string, path: string): Pr
     },
   });
 }
+
+// ---- Build artifact checks (used by the verify_build_output / upload_build / verify_upload tools) ----------------
+async function ownedProject(userId: string, projectId: string) {
+  const proj = await loadProject(projectId);
+  if (!proj || proj.ownerId !== userId) throw new BuildError("Project not found", 404);
+  return proj;
+}
+
+/** Re-validates the stored build artifact: safe paths, entry, size limits, hash integrity, and no leaked secrets. */
+export async function verifyBuildOutput(userId: string, projectId: string) {
+  const { settings: s } = await ownedProject(userId, projectId);
+  const id = str(s["staticFileId"]);
+  if (!id) throw new BuildError("This project has no stored build yet. Build it first.", 404);
+  const { getFileText } = await import("../storage/drive.server");
+  const bundle = JSON.parse(await getFileText(id)) as { files?: ArtifactFile[]; entry?: string };
+  const files = Array.isArray(bundle.files) ? bundle.files : [];
+  const issues: string[] = [];
+  let art: ReturnType<typeof prepareArtifact> | null = null;
+  try { art = prepareArtifact(files); } catch (e) { issues.push(e instanceof Error ? e.message : String(e)); }
+  const hash = await hashFiles(files.map((f) => ({ path: f.path, content: f.content, encoding: "base64" })));
+  const hashMatches = hash === s["staticHash"];
+  if (!hashMatches) issues.push("Stored artifact does not match the recorded build hash.");
+  const { SECRET_PATTERNS } = await import("../../tools/policy");
+  const secrets: { file: string; kind: string }[] = [];
+  for (const f of files) {
+    if (!/\.(html?|js|mjs|css|json|txt|map)$/i.test(f.path)) continue;
+    let text = ""; try { text = new TextDecoder().decode(Uint8Array.from(atob(f.content), (c) => c.charCodeAt(0))); } catch { continue; }
+    for (const p of SECRET_PATTERNS) { p.re.lastIndex = 0; if (p.re.test(text)) secrets.push({ file: f.path, kind: p.name }); }
+  }
+  if (secrets.length) issues.push(`Possible secrets in build output (${secrets.length}).`);
+  return { ok: issues.length === 0, fileId: id, entry: art?.entry ?? null, fileCount: files.length, bytes: art?.bytes ?? null, hashMatches, buildVersion: Number(s["buildVersion"] ?? 0), secrets: secrets.slice(0, 20), issues };
+}
+
+/** Uploads the current files of a static (plain HTML) project as its build. React + Vite uploads are done by the runtime. */
+export async function uploadBuild(userId: string, projectId: string): Promise<BuildState> {
+  const { settings: s } = await ownedProject(userId, projectId);
+  const fs = await import("../../sandbox/fs.server");
+  const tree = await fs.readTree(projectId);
+  if (tree.unchanged) throw new BuildError("Project files unavailable");
+  const files: HashFile[] = tree.files.filter((f) => !IGNORED.test(f.path)).map((f) => ({ path: f.path, content: f.content, encoding: f.encoding === "base64" ? "base64" : "utf8" }));
+  if (detectFramework(files)) throw new BuildError("React + Vite builds are uploaded by the build runtime itself; use run_production_build.", 409);
+  if (!isStaticProject(files.map((f) => f.path))) throw new BuildError("This project has no index.html, so there is nothing to upload.", 400);
+  if (files.some((f) => !safeRelPath(f.path))) throw new BuildError("Project contains an unsafe file path.");
+  const sourceHash = await hashFiles(files);
+  if (s["sourceHash"] === sourceHash && s["staticFileId"]) return { status: "unchanged", previewUrl: previewUrlFor(userId, projectId), sourceHash };
+  return publishStatic(userId, projectId, s, files, sourceHash);
+}
+
+/** Confirms the live build really is in this project's Drive static folder and its metadata points at it. */
+export async function verifyUpload(userId: string, projectId: string) {
+  const { settings: s } = await ownedProject(userId, projectId);
+  const id = str(s["staticFileId"]);
+  if (!id) throw new BuildError("This project has no uploaded build yet.", 404);
+  const { drive, getFileText } = await import("../storage/drive.server");
+  const folders = await foldersFor(userId, projectId, s);
+  const r = await drive(`/files/${id}?fields=id,name,size,parents,trashed,modifiedTime&supportsAllDrives=true`);
+  if (r.status === 404) return { ok: false, fileId: id, issues: ["The build file no longer exists in Google Drive."] };
+  if (!r.ok) throw new BuildError(`Google Drive returned ${r.status}`, 502);
+  const m = (await r.json()) as { name?: string; size?: string; parents?: string[]; trashed?: boolean; modifiedTime?: string };
+  const issues: string[] = [];
+  if (m.trashed) issues.push("The build file is in the Drive trash.");
+  if (!m.parents?.includes(folders.static)) issues.push("The build file is not in this project's static folder.");
+  if (s["staticHash"] && m.name !== `${s["staticHash"]}.json`) issues.push("The build file name does not match the recorded build hash.");
+  let metadataMatches: boolean | null = null;
+  const metaId = str(s["metadataFileId"]);
+  if (metaId) {
+    try { const meta = JSON.parse(await getFileText(metaId)) as { artifactHash?: string; projectId?: string }; metadataMatches = meta.artifactHash === s["staticHash"] && meta.projectId === projectId; }
+    catch { metadataMatches = false; }
+    if (!metadataMatches) issues.push("Project metadata does not point at the current build.");
+  }
+  return { ok: issues.length === 0, fileId: id, name: m.name ?? null, bytes: m.size ? Number(m.size) : null, modifiedAt: m.modifiedTime ?? null, inProjectFolder: !!m.parents?.includes(folders.static), metadataMatches, issues };
+}

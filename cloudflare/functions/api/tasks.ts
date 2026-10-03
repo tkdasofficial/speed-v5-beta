@@ -16,13 +16,18 @@ const create = z.object({
 export async function createBgTask(raw: unknown) {
   const data = create.parse(raw);
   const user = await me();
+  return createTaskFor(user.id, data);
+}
+
+/** Validated, idempotent task creation for `userId` (shared by the RPC and the agent's create_task tool). */
+export async function createTaskFor(userId: string, data: { type: string; projectId?: string | undefined; payload: Record<string, unknown>; idempotencyKey?: string | undefined }) {
   const { isTaskType } = await import("../../tasks/registry");
   if (!isTaskType(data.type)) throw new Error(`Unknown task type: ${data.type}`);
-  if (data.projectId) { const { assertOwnsProject } = await import("@security/authorize.server"); await assertOwnsProject(user.id, data.projectId); }
+  if (data.projectId) { const { assertOwnsProject } = await import("@security/authorize.server"); await assertOwnsProject(userId, data.projectId); }
   const S = await import("../../tasks/store.server");
-  const { row, created } = await S.insertTask({ userId: user.id, projectId: data.projectId ?? null, type: data.type, payload: data.payload as Json, idempotencyKey: data.idempotencyKey });
+  const { row, created } = await S.insertTask({ userId, projectId: data.projectId ?? null, type: data.type, payload: data.payload as Json, idempotencyKey: data.idempotencyKey });
   if (created) { const { kickTask } = await import("../../tasks/runner"); await kickTask(ctx().env, row.id); }
-  return S.toJob(row);
+  return { ...S.toJob(row), created };
 }
 
 async function owned(id: string) {
@@ -69,12 +74,20 @@ export async function bgTaskEvents(raw: unknown) {
 
 export async function cancelBgTask(raw: unknown) {
   const { id } = z.object({ id: v.id }).parse(raw);
-  const { t, S } = await owned(id);
-  if (["completed", "failed", "cancelled"].includes(t.status)) return S.toJob(t);
+  const user = await me();
+  return cancelTaskFor(user.id, id);
+}
+
+/** Requests cancellation of one of `userId`'s tasks (optionally only within `projectId`). */
+export async function cancelTaskFor(userId: string, id: string, projectId?: string) {
+  const S = await import("../../tasks/store.server");
+  const t = await S.getTask(id);
+  if (!t || t.user_id !== userId || (projectId && t.project_id !== projectId)) throw new Error("Task not found");
+  if (["completed", "failed", "cancelled"].includes(t.status)) return { ...S.toJob(t), alreadyFinished: true };
   await S.requestCancel(id);
   const { kickTask } = await import("../../tasks/runner");
   await kickTask(ctx().env, id).catch(() => undefined);
-  return S.toJob({ ...t, cancel_requested: 1 });
+  return { ...S.toJob({ ...t, cancel_requested: 1 }), alreadyFinished: false };
 }
 
 /**
