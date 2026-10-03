@@ -65,7 +65,7 @@ export const execTools = [
       const started = await start(env, "command", undefined, { argv: [parsed.program, ...parsed.args], timeoutSec: a.timeoutSeconds });
       const jobId = started.data.jobId;
       const r = a.waitSeconds ? await poll(env, jobId, a.waitSeconds * 1000, (x) => done(x.status)) : await read(env, jobId);
-      const data = { command: parsed.display, ...shape(r), jobId };
+      const data = { ...shape(r), command: parsed.display, jobId };
       if (!done(r.status)) return { data, warnings: ["Still running — call wait_for_command with this jobId."], stateChanges: started.stateChanges, next: "wait_for_command" };
       if (r.status !== "succeeded") throw new ToolFailure(r.exitCode === 124 ? "TIMEOUT" : "COMMAND_FAILED", `${parsed.display} ${r.status === "expired" ? "expired before finishing" : `exited with code ${r.exitCode}`}`, false, data, "diagnose_failure");
       return { data, stateChanges: started.stateChanges };
