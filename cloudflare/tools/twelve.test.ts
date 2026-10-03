@@ -61,7 +61,7 @@ mock.module("../functions/api/tasks", () => ({
 import { loadTools, ToolSession } from "./index";
 import { getTool, findToolsByCapability, allTools } from "./registry";
 import { parseCommand } from "./policy";
-import { parseDuckDuckGo, searchWeb, type SearchProvider } from "./catalog/websearch";
+import { parseDuckDuckGo, parseDuckDuckGoLite, parseDuckDuckGoInstant, parseSearxng, parseWikipedia, parseReddit, canonicalUrl, searchWeb, type SearchProvider } from "./catalog/websearch";
 import { decideRecovery } from "./recovery";
 import { planParallel } from "./parallel";
 
@@ -110,40 +110,88 @@ describe("web_search", () => {
     expect(r[0]!.domain).toBe("vite.dev");
     expect(r[0]!.title).toBe("Getting Started | Vite");
   });
-  it("valid search through the executor, normalized, secrets redacted", async () => {
-    const orig = globalThis.fetch;
-    globalThis.fetch = (async () => new Response(html, { status: 200 })) as unknown as typeof fetch;
-    try {
-      const r = await sess().execute("web_search", { query: "vite guide" });
+  // URL-routed fake network covering all four public sources.
+  const routes = (o: { searx?: unknown; wiki?: unknown; reddit?: unknown; ddg?: string } = {}) => (async (input: RequestInfo | URL) => {
+    const u = String(input instanceof Request ? input.url : input);
+    if (u.includes("/search?q=") && u.includes("format=json") && !u.includes("reddit")) return o.searx ? Response.json(o.searx) : new Response("<html>bot check</html>", { status: 200 });
+    if (u.includes("duckduckgo.com")) return u.includes("api.duckduckgo") ? Response.json({}) : new Response(o.ddg ?? "", { status: 200 });
+    if (u.includes("wikipedia.org")) return o.wiki ? Response.json(o.wiki) : new Response("", { status: 503 });
+    if (u.includes("reddit.com")) return o.reddit ? Response.json(o.reddit) : new Response("blocked", { status: 403 });
+    return new Response("", { status: 404 });
+  }) as unknown as typeof fetch;
+  const searx = { results: [{ title: "Getting Started | Vite", url: "https://vite.dev/guide/?utm_source=x", content: "Next generation frontend tooling" }, { title: "Vite on GitHub", url: "https://github.com/vitejs/vite", content: "Repo" }] };
+  const wiki = { query: { search: [{ title: "Vite (software)", snippet: "<span>Vite</span> is a build tool" }] } };
+  const reddit = { data: { children: [{ data: { title: "Vite vs webpack?", permalink: "/r/webdev/comments/1/x/", subreddit_name_prefixed: "r/webdev", score: 42, num_comments: 7 } }, { data: { title: "nsfw", permalink: "/r/x/1", over_18: true } }] } };
+  const withFetch = async (f: typeof fetch, fn: () => Promise<void>) => { const orig = globalThis.fetch; globalThis.fetch = f; try { await fn(); } finally { globalThis.fetch = orig; } };
+
+  it("queries all four sources in parallel, merges, de-duplicates and attributes", async () => {
+    await withFetch(routes({ searx, wiki, reddit, ddg: html }), async () => {
+      const r = await sess().execute("web_search", { query: "vite guide", limit: 10 });
       expect(r.success).toBe(true);
-      const d = r.data as { provider: string; count: number; results: { snippet: string }[] };
-      expect(d.provider).toBe("duckduckgo");
-      expect(d.count).toBe(2);
+      const d = r.data as { provider: string; count: number; sources: { provider: string; status: string }[]; results: { url: string; source: string; sources: string[]; rank: number }[] };
+      expect(d.sources.map((s) => s.provider).sort()).toEqual(["duckduckgo", "reddit", "searxng", "wikipedia"]);
+      expect(d.sources.every((s) => s.status === "ok")).toBe(true);
+      const vite = d.results.filter((x) => x.url.includes("vite.dev/guide"));
+      expect(vite.length).toBe(1); // same page from SearXNG (with utm) and DuckDuckGo is merged
+      expect(vite[0]!.sources.sort()).toEqual(["duckduckgo", "searxng"]);
+      expect(d.results[0]!.url).toContain("vite.dev/guide"); // agreement ranks first
+      expect(d.results.map((x) => x.rank)).toEqual(d.results.map((_, i) => i + 1));
+      expect(d.results.some((x) => x.source === "wikipedia" && x.url === "https://en.wikipedia.org/wiki/Vite_(software)")).toBe(true);
+      expect(d.results.some((x) => x.source === "reddit" && x.url.startsWith("https://www.reddit.com/r/webdev/"))).toBe(true);
+      expect(JSON.stringify(d)).not.toContain("nsfw");
       expect(JSON.stringify(d)).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz");
-    } finally { globalThis.fetch = orig; }
+      expect(r.operationId).toMatch(/^op_/);
+    });
+  });
+  it("partial source failure is a success with warnings naming the failed sources", async () => {
+    await withFetch(routes({ wiki }), async () => {
+      const r = await sess().execute("web_search", { query: "vite" });
+      expect(r.success).toBe(true);
+      expect((r.data as { count: number }).count).toBe(1);
+      expect(r.warnings.join(" ")).toMatch(/reddit unavailable/);
+    });
+  });
+  it("sources filter restricts which sources are called", async () => {
+    const called: string[] = [];
+    const f = routes({ searx, wiki, reddit, ddg: html });
+    await withFetch((async (i: RequestInfo | URL) => { called.push(String(i)); return f(i); }) as unknown as typeof fetch, async () => {
+      const r = await sess().execute("web_search", { query: "vite", sources: ["wikipedia"] });
+      expect(r.success).toBe(true);
+      expect(called.every((u) => u.includes("wikipedia.org"))).toBe(true);
+    });
+  });
+  it("rejects unknown sources and too-short queries", async () => {
+    expect((await sess().execute("web_search", { query: "vite", sources: ["google"] })).error?.code).toBe("INVALID_ARGUMENT");
+    expect((await sess().execute("web_search", { query: "v" })).error?.code).toBe("INVALID_ARGUMENT");
   });
   it("no results is a clean success with a warning", async () => {
-    const orig = globalThis.fetch;
-    globalThis.fetch = (async () => new Response("<html>No results</html>", { status: 200 })) as unknown as typeof fetch;
-    try {
+    await withFetch(routes({ searx: { results: [] }, wiki: { query: { search: [] } }, reddit: { data: { children: [] } }, ddg: "<html>No results</html>" }), async () => {
       const r = await sess().execute("web_search", { query: "zzqxj nothing" });
       expect(r.success).toBe(true);
       expect((r.data as { count: number }).count).toBe(0);
       expect(r.warnings.join(" ")).toContain("No results");
-    } finally { globalThis.fetch = orig; }
+    });
   });
-  const prov = (name: string, fn: SearchProvider["search"]): SearchProvider => ({ name, available: () => true, search: fn });
-  it("provider failure falls through to the next provider", async () => {
+  const prov = (name: string, fn: SearchProvider["search"]): SearchProvider => ({ name, weight: 1, available: () => true, search: fn });
+  it("one failing source does not hide the others", async () => {
     const r = await searchWeb("q", 5, [prov("a", async () => { throw new Error("boom"); }), prov("b", async () => [{ title: "T", url: "https://x.dev/", snippet: "", domain: "x.dev", source: "b" }])], { timeoutMs: 1000 });
     expect(r.provider).toBe("b");
     expect(r.tried[0]!.provider).toBe("a");
   });
-  it("all providers failing is a structured error, never fake results", async () => {
+  it("all sources failing is a structured error, never fake results", async () => {
     await expect(searchWeb("q", 5, [prov("a", async () => { throw new Error("down"); })], { timeoutMs: 1000 })).rejects.toMatchObject({ code: "INTEGRATION_FAILED" });
   });
   it("timeout is reported as TIMEOUT", async () => {
     const slow = prov("slow", (_q, _n, signal) => new Promise((_, rej) => signal.addEventListener("abort", () => rej(Object.assign(new Error("aborted"), { name: "AbortError" })))));
     await expect(searchWeb("q", 5, [slow], { timeoutMs: 30 })).rejects.toMatchObject({ code: "TIMEOUT" });
+  });
+  it("parsers handle real-shaped payloads", () => {
+    expect(parseWikipedia(wiki, 5)[0]!.snippet).toBe("Vite is a build tool");
+    expect(parseReddit(reddit, 5).length).toBe(1);
+    expect(parseSearxng(searx, 5)[0]!.domain).toBe("vite.dev");
+    expect(parseDuckDuckGoLite(`<a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fvite.dev%2F&amp;rut=1" class='result-link'>Vite</a></td></tr><tr><td class='result-snippet'>Fast</td>`, 5)[0]).toMatchObject({ url: "https://vite.dev/", snippet: "Fast" });
+    expect(parseDuckDuckGoInstant({ AbstractURL: "https://en.wikipedia.org/wiki/Vite", AbstractText: "Vite is…", Heading: "Vite", RelatedTopics: [{ FirstURL: "https://duckduckgo.com/Rollup", Text: "Rollup - bundler" }] }, 5).length).toBe(2);
+    expect(canonicalUrl("https://www.Example.com/a/?utm_source=x#top")).toBe(canonicalUrl("https://example.com/a"));
   });
 });
 
