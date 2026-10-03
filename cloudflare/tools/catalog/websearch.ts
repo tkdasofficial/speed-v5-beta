@@ -210,7 +210,7 @@ export function mergeResults(lists: { provider: string; weight: number; results:
     if (!cur.sources.includes(l.provider)) cur.sources.push(l.provider);
     cur.score += s;
     if (r.snippet.length > cur.snippet.length) cur.snippet = r.snippet;
-    cur.publishedAt ??= r.publishedAt;
+    if (!cur.publishedAt && r.publishedAt) cur.publishedAt = r.publishedAt;
   });
   const out = [...by.values()].map((r) => {
     const t = r.title.toLowerCase();
@@ -225,7 +225,7 @@ export function mergeResults(lists: { provider: string; weight: number; results:
 }
 
 /** Runs every available source in parallel, each with its own timeout. Fails only when every source failed. */
-export async function searchWeb(q: string, n: number, list: SearchProvider[], o: { timeoutMs: number; signal?: AbortSignal; sources?: string[] }) {
+export async function searchWeb(q: string, n: number, list: SearchProvider[], o: { timeoutMs: number; signal?: AbortSignal | undefined; sources?: readonly string[] | undefined }) {
   const chosen = list.filter((p) => p.available() && (!o.sources?.length || o.sources.includes(p.name)));
   if (!chosen.length) throw new ToolFailure("INTEGRATION_FAILED", "No web search source is available", false);
   const t0 = Date.now();
