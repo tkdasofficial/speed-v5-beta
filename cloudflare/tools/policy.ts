@@ -105,7 +105,7 @@ export interface ParsedCommand { program: "npm" | "npx" | "node"; args: string[]
 const LOCAL_BINS = new Set(["tsc", "vite", "eslint", "prettier", "vitest", "jest", "tailwindcss", "postcss", "next", "astro", "svelte-check", "vue-tsc", "playwright"]);
 const NPM_SUBCOMMANDS = new Set(["install", "i", "ci", "run", "run-script", "test", "t", "ls", "list", "outdated", "view", "info", "explain", "why", "audit", "pack", "exec"]);
 const DENIED_FLAGS = /^(-g|--global|--prefix|--userconfig|--globalconfig|--cache|--registry|--unsafe-perm|--script-shell|--node-options|-r|--require|--import|--loader|--experimental-loader|-e|--eval|-p|--print|--inspect.*)(=|$)/;
-const ARG = /^[\w@%+=:,./^~-]+$/;
+const ARG = /^[\w@%+=:,./^~ -]+$/;
 export function tokenize(cmd: string): string[] {
   const out: string[] = []; let cur = ""; let q: string | null = null; let any = false;
   for (const ch of cmd.trim()) {
