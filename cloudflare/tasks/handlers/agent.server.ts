@@ -27,71 +27,50 @@ type P = { prompt?: string; model?: "speed" | "flash" | "heavy"; depth?: "quick"
 function labels(name: string, target: string | null): { kind: string; running: string; done: string; failed: string } {
   const t = target ?? "";
   const v = (kind: string, ing: string, ed: string) => ({ kind, running: `${ing}${t ? ` ${t}` : ""}`, done: `${ed}${t ? ` ${t}` : ""}`, failed: `Couldn't ${ing.toLowerCase().replace(/ing$/, "")}${t ? ` ${t}` : ""}` });
-  if (name === "create_file") return v("create", "Creating", "Created");
-  if (name === "edit_file" || name === "patch_file") return v("edit", "Editing", "Edited");
-  if (name === "delete_file") return v("delete", "Deleting", "Deleted");
+  if (name === "create_file" || name === "create_directory" || /^generate_/.test(name)) return v("create", "Creating", "Created");
+  if (/^(update_file|write_file|apply_patch|format_file|refactor_code|replace_in_file)$/.test(name)) return v("edit", "Editing", "Edited");
+  if (/^delete_/.test(name)) return v("delete", "Deleting", "Deleted");
   if (name === "rename_file" || name === "move_file") return v("edit", "Moving", "Moved");
-  if (/^(read|get_file|get_code)/.test(name)) return v("read", "Reading", "Read");
-  if (/^(search|find)_/.test(name)) return v("search", "Searching", "Searched");
-  if (/^(list|get_file_tree|file_exists)/.test(name)) return v("read", "Exploring", "Explored");
-  if (/^validate_/.test(name)) return v("check", "Validating", "Validated");
-  if (/^build_/.test(name)) return { kind: "check", running: "Checking project", done: "Check passed", failed: "Check failed" };
-  if (/rollback/.test(name)) return v("fix", "Undoing change", "Undid change");
+  if (/^(read|get_file|get_project_structure)/.test(name)) return v("read", "Reading", "Read");
+  if (/(search|find)/.test(name)) return v("search", "Searching", "Searched");
+  if (/^list_/.test(name)) return v("read", "Exploring", "Explored");
+  if (/^(verify_|run_|check_|detect_|scan_)/.test(name)) return { kind: "check", running: "Checking project", done: "Check passed", failed: "Check failed" };
+  if (/^(add|remove|update|install)_dependenc/.test(name)) return v("edit", "Updating dependencies", "Updated dependencies");
+  if (/^git_/.test(name)) return v("inspect", `Git ${name.slice(4).replace(/_/g, " ")}`, `Git ${name.slice(4).replace(/_/g, " ")} done`);
+  if (/(rollback|restore|recover)/.test(name)) return v("fix", "Undoing change", "Undid change");
   return v("inspect", "Inspecting", "Inspected");
 }
+/** Legacy/shorthand names the model may still use → the orchestrated tool that does the same work. */
+const ALIASES: Record<string, string> = { edit_file: "update_file", search_text: "search_files", search_filename: "search_files", build_project: "verify_project", build_static: "verify_project", validate_project: "verify_project", get_errors: "detect_errors", get_file_tree: "get_project_structure" };
 function toTool(s: Step): { name: string; args: Record<string, unknown> } {
   switch (s.kind) {
     case "read": return { name: "read_file", args: { path: s.path } };
-    case "create": return { name: "create_file", args: { path: s.path, content: s.content ?? "" } };
-    case "edit": return { name: "edit_file", args: s.find === undefined && s.content !== undefined ? { path: s.path, content: s.content } : { path: s.path, find: s.find, replace: s.replace ?? "" } };
-    case "delete": return { name: "delete_file", args: { path: s.path, force: true } };
-    case "check": return { name: "build_project", args: {} };
-    case "tool": return { name: s.name ?? "", args: s.args ?? {} };
+    case "create": return { name: "write_file", args: { path: s.path, content: s.content ?? "" } };
+    case "edit": return s.find === undefined && s.content !== undefined ? { name: "write_file", args: { path: s.path, content: s.content } } : { name: "update_file", args: { path: s.path, find: s.find, replace: s.replace ?? "" } };
+    case "delete": return { name: "delete_file", args: { path: s.path, confirm: true } };
+    case "check": return { name: "verify_project", args: {} };
+    case "tool": {
+      const raw = s.name ?? ""; const args = { ...(s.args ?? {}) };
+      if (raw === "edit_file" && typeof args["content"] === "string" && args["find"] === undefined) return { name: "write_file", args };
+      if (raw === "patch_file") return { name: "apply_patch", args: { path: args["path"], edits: args["edits"] } };
+      return { name: ALIASES[raw] ?? raw, args };
+    }
     default: return { name: "", args: {} };
   }
 }
+const VERIFY = new Set(["verify_project"]);
 
-async function saveMessage(c: TaskContext, role: "user" | "assistant", content: string): Promise<Message> {
-  const { d1 } = await import("@backend/d1");
-  const { publish } = await import("@realtime/publish.server");
-  const pid = c.task.project_id!;
-  await d1("INSERT OR IGNORE INTO conversations (id, project_id) VALUES (?, ?)", [pid, pid]);
-  const [row] = await d1<{ id: string; created_at: string }>("INSERT INTO messages (id, conversation_id, role, content) VALUES (?, ?, ?, ?) RETURNING id, created_at", [crypto.randomUUID(), pid, role, content]);
-  const m: Message = { id: row!.id, projectId: pid, role, content, createdAt: row!.created_at, version: 1 };
-  await publish(c.task.user_id, "message", "upsert", m.id, 1, m);
-  return m;
+/** Compact, machine-readable result for the model (success/error code/next action). */
+function fmt(r: import("../../tools/types").ToolResult, max = 6000): string {
+  if (!r.success) return `${r.toolName} [${r.operationId}]: ERROR ${r.error?.code} — ${r.error?.message}${r.nextRecommendedAction ? ` (next: ${r.nextRecommendedAction})` : ""}`;
+  const d = typeof r.data === "string" ? r.data : JSON.stringify(r.data);
+  return `${r.toolName} [${r.operationId}]: ok${r.warnings.length ? ` (warnings: ${r.warnings.join("; ").slice(0, 300)})` : ""}${r.nextRecommendedAction ? ` (next: ${r.nextRecommendedAction})` : ""}\n${(d ?? "").slice(0, max)}`;
 }
-async function say(c: TaskContext, st: State, text: string, role: "user" | "assistant" = "assistant") {
-  const m = await saveMessage(c, role, text);
-  await c.emit("message", { messageId: m.id, round: st.round ?? 0 });
-}
-const phase = (c: TaskContext, name: string) => c.emit("phase", { phase: name });
+const verifyOk = (r: import("../../tools/types").ToolResult) => r.success && (r.data as { ok?: boolean } | null)?.ok !== false;
 
-/** Emits action.started, runs the work, then emits the completed/failed action with its real result. */
-async function act<T>(c: TaskContext, st: State, a: { kind: string; running: string; done: string; failed?: string; round?: number }, work: () => Promise<{ ok: boolean; result?: T; error?: string; done?: string }> | { ok: boolean; result?: T; error?: string; done?: string }) {
-  const id = `${c.task.id}-a${(st.n = (st.n ?? 0) + 1)}`;
-  const round = a.round ?? st.round ?? 0;
-  await c.emit("action.started", { id, round, kind: a.kind, title: a.running, target: null });
-  let r: { ok: boolean; result?: T; error?: string; done?: string };
-  try { r = await work(); } catch (e) { r = { ok: false, error: e instanceof Error ? e.message : String(e) }; }
-  await c.emit("action", { id, round, kind: a.kind, title: r.ok ? (r.done ?? a.done) : (a.failed ?? a.running), target: null, ok: r.ok, error: r.ok ? null : (r.error ?? "Failed").slice(0, 600) });
-  return { id, ...r };
-}
-
-async function makeTools(store: MemoryFileStore) {
-  const { AgentTools } = await import("../../../sandbox/intelligence/tools");
-  const { validateProject } = await import("../../../sandbox/intelligence/validate");
-  const { MemoryFileStore: MFS } = await import("../../../sandbox/workspace/workspace");
-  const { movePath } = await import("../../../sandbox/filesystem/move");
-  return new AgentTools({
-    local: store, output: new MFS(), folders: () => store.folders(),
-    write: (path, content) => { store.set({ path, content, encoding: "utf8", updatedAt: Date.now() }); },
-    create: (path, content) => { if (store.get(path)) throw new Error(`File exists: ${path}`); store.set({ path, content, encoding: "utf8", updatedAt: Date.now() }); },
-    remove: (path) => { store.delete(path); store.removeFolder(path); },
-    move: (from, to) => { movePath(store, from, to); },
-    build: () => { const v = validateProject(store); return v.errors.length ? { ok: false, errors: v.errors, warnings: v.warnings } : { ok: true, outputId: `rev`, files: store.list().length, warnings: v.warnings }; },
-    lastOutput: () => null, outputStale: () => false, previewErrors: () => [], clearPreviewErrors: () => undefined,
-  });
+async function session(c: TaskContext, readOnly = false) {
+  const { openToolSession } = await import("../../tools/session.server");
+  return openToolSession({ userId: c.task.user_id, projectId: c.task.project_id!, taskId: c.task.id, confirmed: true, readOnly });
 }
 
 /** Stop takes effect while the model is still answering: poll the persisted cancel flag alongside the call. */
