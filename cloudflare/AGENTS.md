@@ -29,3 +29,4 @@
 - Agent tools all go through the ToolOrchestrator (`cloudflare/tools/`, catalogs registered in `tools/index.ts`); each agent phase sees only its categories via `tools/exposure.ts` and reaches the rest through find_tools, so the model never gets the full catalog.
 - Commands (install/build/typecheck/lint/test/format/script) run only as `runtime_jobs` in the `speed-runtime` `run.yml` workflow (`functions/build/jobs.server.ts`, single-use job tokens); the Worker never runs a shell.
 - Main-D1 migrations are applied by deploy through `migrateMain` (tracked in `_migrations`), so new `cloudflare/migrations/*.sql` files reach production on the next deploy.
+- `web_search` uses only free public sources (SearXNG instances, DuckDuckGo, Wikipedia, Reddit) queried in parallel in `tools/catalog/websearch.ts`, merged by canonical URL; a failed source becomes a warning, so search needs no keys or secrets.
