@@ -9,12 +9,14 @@ import { logTools, securityTools, cleanupTools, recoveryTools, integrationTools,
 import { transformTools, assetTools } from "./catalog/transform";
 import { execTools } from "./catalog/exec";
 import { buildArtifactTools, integrationControlTools, taskControlTools } from "./catalog/platform";
+import { registerCanonicalAliases } from "./aliases";
 import type { ToolDefinition } from "./types";
 
 let loaded = false;
 export function loadTools() {
   if (loaded) return allTools();
   for (const t of [...fileTools, ...coreTools, ...gitTools, ...depTools, ...envTools, ...stateTools, ...planningTools, ...knowledgeTools, ...logTools, ...securityTools, ...cleanupTools, ...recoveryTools, ...integrationTools, ...orchestrationTools, ...transformTools, ...assetTools, ...execTools, ...buildArtifactTools, ...integrationControlTools, ...taskControlTools] as unknown as ToolDefinition[]) registerTool(t);
+  registerCanonicalAliases();
   loaded = true;
   return allTools();
 }
