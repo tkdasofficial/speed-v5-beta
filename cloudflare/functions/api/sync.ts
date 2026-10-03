@@ -150,6 +150,9 @@ export async function agentStep(raw: unknown) {
       await publish(me.id, "message", "upsert", user.id, 1, user);
     }
     const { runAgentRound } = await import("../ai/orchestrator.server");
+    const { loadTools } = await import("../../tools/index");
+    const { catalogText } = await import("../../tools/exposure");
+    loadTools();
     const hist = await d1<{ role: Message["role"]; content: string }>(
       "SELECT role, content FROM (SELECT role, content, created_at, rowid AS r FROM messages WHERE conversation_id = ? AND role IN ('user','assistant') ORDER BY created_at DESC, r DESC LIMIT 30) ORDER BY created_at, r",
       [data.projectId],
@@ -157,7 +160,7 @@ export async function agentStep(raw: unknown) {
     const [proj] = await d1<{ name: string }>("SELECT name FROM projects WHERE id = ?", [data.projectId]);
     const step = await runAgentRound({
       model: data.model, depth: data.depth, plan: data.plan, projectName: proj?.name ?? "project", round: data.round,
-      files: data.files, results: data.results, history: hist.map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
+      files: data.files, results: data.results, tools: catalogText(data.plan ? "planning" : "building", !!data.plan), history: hist.map((h) => ({ role: h.role as "user" | "assistant", content: h.content })),
     });
     const [arow] = await d1<{ id: string; created_at: string }>(
       "INSERT INTO messages (id, conversation_id, role, content) VALUES (?, ?, 'assistant', ?) RETURNING id, created_at",

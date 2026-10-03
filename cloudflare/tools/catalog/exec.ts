@@ -12,19 +12,19 @@ async function start(env: ToolEnv, kind: Kind, script?: string) {
     const r = await j.startJob(env.userId, env.projectId!, kind, { ...(script ? { script } : {}), operationId: env.operationId });
     return { data: { ...r, note: "Runs asynchronously in an isolated runtime; call wait_for_command with this jobId." }, stateChanges: [{ kind: "task" as const, target: r.jobId, detail: `${kind} queued` }], next: "wait_for_command" };
   } catch (e) {
-    if (e instanceof j.JobError) throw new ToolFailure(e.status === 409 ? "CONFLICT" : e.status === 503 ? "INTEGRATION_FAILED" : "EXECUTION_FAILED", e.message, e.status >= 500);
+    if (e instanceof j.JobError) throw new ToolFailure(e.status === 409 ? "CONFLICT" : e.status === 503 ? "INTEGRATION_FAILED" : "COMMAND_FAILED", e.message, e.status >= 500);
     throw e;
   }
 }
 const ex = (name: string, kind: Kind, description: string, capabilities: string[]) => defineTool({
-  name, category: "execution", description, capabilities, readOnly: kind !== "format" && kind !== "install", requiredPermissions: ["project:execute"], timeoutMs: 20_000,
+  name, category: "execution", description, capabilities, readOnly: kind !== "format" && kind !== "install", requiredPermissions: ["build:run"], timeoutMs: 20_000,
   inputSchema: z.object({}), handler: async (_a, env) => start(env, kind),
 });
 
 async function read(env: ToolEnv, jobId: string) {
   const { getJob } = await import("../../functions/build/jobs.server");
   const r = await getJob(env.userId, env.projectId!, jobId);
-  if (!r) throw new ToolFailure("NOT_FOUND", `No command ${jobId} in this project`);
+  if (!r) throw new ToolFailure("INVALID_ARGUMENT", `No command ${jobId} in this project`);
   return r;
 }
 const done = (s: string) => s === "succeeded" || s === "failed" || s === "expired";
@@ -38,17 +38,17 @@ export const execTools = [
   ex("run_tests", "test", "Run the project's test script (npm test) and return the real output.", ["vitest", "jest", "tests"]),
   ex("run_formatter", "format", "Run Prettier over the project and save the reformatted files as one revision.", ["prettier"]),
   defineTool({
-    name: "run_script", category: "execution", description: "Run one package.json script (npm run <script>) in the isolated runtime.", requiredPermissions: ["project:execute"], timeoutMs: 20_000,
+    name: "run_script", category: "execution", description: "Run one package.json script (npm run <script>) in the isolated runtime.", requiredPermissions: ["build:run"], timeoutMs: 20_000,
     inputSchema: z.object({ script: z.string().regex(/^[a-z0-9:_-]{1,60}$/i) }),
     handler: async (a, env) => {
       const pkg = (await env.files()).get("package.json");
       const scripts = pkg ? ((JSON.parse(pkg.content) as { scripts?: Record<string, string> }).scripts ?? {}) : {};
-      if (!scripts[a.script]) throw new ToolFailure("NOT_FOUND", `package.json has no "${a.script}" script (has: ${Object.keys(scripts).join(", ") || "none"})`);
+      if (!scripts[a.script]) throw new ToolFailure("INVALID_ARGUMENT", `package.json has no "${a.script}" script (has: ${Object.keys(scripts).join(", ") || "none"})`);
       return start(env, "script", a.script);
     },
   }),
   defineTool({
-    name: "run_command", category: "execution", description: "Run a shell-style command. Only safe, known commands are accepted (npm install/build/test/lint, tsc, npm run <script>, npm install <pkg>, git status/diff/log); each maps to its dedicated tool.", requiredPermissions: ["project:execute"], capabilities: ["terminal", "shell"],
+    name: "run_command", category: "execution", description: "Run a shell-style command. Only safe, known commands are accepted (npm install/build/test/lint, tsc, npm run <script>, npm install <pkg>, git status/diff/log); each maps to its dedicated tool.", requiredPermissions: ["build:run"], capabilities: ["terminal", "shell"],
     inputSchema: z.object({ command: z.string().min(1).max(200) }),
     handler: async (a) => { const m = resolveCommand(a.command); return { data: { resolvedTool: m.tool, args: m.args ?? {} }, next: m.tool }; },
   }),
@@ -69,7 +69,7 @@ export const execTools = [
     },
   }),
   defineTool({
-    name: "run_dev_server", category: "execution", description: "There is no long-running dev server; this builds the project and opens a live preview session instead.", requiredPermissions: ["project:execute"],
+    name: "run_dev_server", category: "execution", description: "There is no long-running dev server; this builds the project and opens a live preview session instead.", requiredPermissions: ["build:run"],
     inputSchema: z.object({}),
     handler: async () => ({ data: { note: "Use run_production_build, then open_preview." }, next: "run_production_build" }),
   }),

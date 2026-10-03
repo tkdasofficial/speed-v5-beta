@@ -10,7 +10,7 @@ const dep = group({ category: "dependencies" });
 /** Highest published version satisfying a simple ^/~/exact range (enough for package.json maintenance). */
 function satisfies(v: string, range: string) {
   const p = (s: string) => s.replace(/^[^\d]*/, "").split(/[.-]/).slice(0, 3).map((x) => Number(x) || 0);
-  const [a, b, c] = p(v), [x, y, z] = p(range);
+  const [a = 0, b = 0, c = 0] = p(v), [x = 0, y = 0, z = 0] = p(range);
   if (/-/.test(v)) return false;
   if (range.startsWith("^")) return a === x && (a > 0 ? (b! > y! || (b === y && c! >= z!)) : b === y && c! >= z!);
   if (range.startsWith("~")) return a === x && b === y && c! >= z!;
