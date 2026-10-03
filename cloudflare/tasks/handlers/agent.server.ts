@@ -246,14 +246,13 @@ async function validateStep(c: TaskContext, st: State): Promise<StepResult> {
   const pid = c.task.project_id!;
   const fs = await import("../../sandbox/fs.server");
   const { store } = await fs.loadStore(pid);
-  const tools = await makeTools(store);
-  const { formatToolResult } = await import("../../../sandbox/intelligence/tools");
-  const { validateProject } = await import("../../../sandbox/intelligence/validate");
+  const { validateProject, validateReferences } = await import("../../../sandbox/intelligence/validate");
+  const sess = await session(c);
   await phase(c, "validating");
   await c.progress(0.8, "Validating");
   const plan = st.plan;
   const changed = new Set(st.changed ?? []);
-  const v = await act(c, st, { kind: "check", running: "Validating requirements", done: "Requirements verified", failed: "Validation failed" }, () => {
+  const v = await act(c, st, { kind: "check", running: "Validating requirements", done: "Requirements verified", failed: "Validation failed" }, async () => {
     const issues: string[] = [];
     // Vite keeps index.html at the root, so a planned CRA-style public/index.html is satisfied by it.
     const exists = (f: string) => !!store.get(f) || (f === "public/index.html" && !!store.get("index.html"));
@@ -270,9 +269,9 @@ async function validateStep(c: TaskContext, st: State): Promise<StepResult> {
     }
     const proj = validateProject(store);
     for (const e of proj.errors.slice(0, 10)) { const d = e as unknown as { path?: string; line?: number; message?: string }; issues.push(`${d.path ? `${d.path}${d.line ? `:${d.line}` : ""}: ` : ""}${d.message ?? JSON.stringify(e).slice(0, 300)}`); };
-    const refs = tools.run("validate_references", {});
-    if (!refs.success) issues.push(refs.error.message);
-    else if (((refs.data as { errors?: unknown[] })?.errors?.length ?? 0) > 0) issues.push(formatToolResult("validate_references", refs).slice(0, 800));
+    for (const d of validateReferences(store).filter((x) => x.severity === "error").slice(0, 10)) issues.push(`${d.file}${d.line ? `:${d.line}` : ""}: ${d.message}`);
+    const sec = await sess.execute("scan_secrets", {});
+    if (sec.success && ((sec.data as { findings?: unknown[] })?.findings?.length ?? 0) > 0) issues.push(`Secrets found in source files — move them to environment variables: ${JSON.stringify((sec.data as { findings: unknown[] }).findings.slice(0, 5))}`);
     return issues.length ? { ok: false, result: issues, error: issues.slice(0, 6).join("\n") } : { ok: true, result: [] };
   });
   let issues = (v.result as string[] | undefined) ?? [];
@@ -282,10 +281,9 @@ async function validateStep(c: TaskContext, st: State): Promise<StepResult> {
     // static build (validate → stage → verify). Speed Runtime can replace this step with a real build + run later.
     await phase(c, "testing");
     await c.progress(0.9, "Testing");
-    const t = await act(c, st, { kind: "check", running: "Building and testing project", done: "Build test passed", failed: "Build test failed" }, () => {
-      const res = tools.run("build_project");
-      const ok = res.success && (res.data as { ok: boolean }).ok;
-      return ok ? { ok: true } : { ok: false, error: formatToolResult("build_project", res).slice(0, 800) };
+    const t = await act(c, st, { kind: "check", running: "Building and testing project", done: "Build test passed", failed: "Build test failed" }, async () => {
+      const res = await sess.execute("verify_project", {});
+      return verifyOk(res) ? { ok: true } : { ok: false, error: fmt(res).slice(0, 800) };
     });
     st.test = t.ok ? "Passed" : "Failed";
     if (!t.ok) issues = [t.error ?? "Build test failed"];
