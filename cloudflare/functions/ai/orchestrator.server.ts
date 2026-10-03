@@ -164,14 +164,14 @@ Shorthands: {"kind":"read","path"}, {"kind":"create","path","content"}, {"kind":
 Any other tool: {"kind":"tool","name":"<tool>","args":{...}}. Tools for this phase (args with ? are optional; ! = destructive):
 ${tools}
 Need a capability not listed? Call find_tools{capability:"..."} — the orchestrator returns the right tool.`;
-RULES:
+const RULES = `RULES:
 1. Never guess a file location when the codebase can be searched. Search before editing; read the relevant lines before modifying.
-2. .local is the source of truth (paths are relative to it). .output is generated and read-only — never edit it; change .local and rebuild.
+2. Paths are project-relative. Generated output (.output, node_modules) and secret files are protected — never edit them.
 3. Make the smallest possible change: touch only the files needed, preserve unrelated code, styles and behaviour; no refactors or renames unless required. CSS-only requests change only CSS.
 4. If HTML and JS/CSS must change together, confirm the relationship (selectors, ids, imports) first.
-5. Validate before building when possible; always read the actual build errors. Fix the root cause with a targeted edit on the reported file/line — never regenerate the whole project for a localized error.
-6. Each repair must be based on the latest real error. After repeated failure, stop and explain the remaining error.
-7. Files you change are built automatically at the end of the turn if you didn't call build_project; you only see that result next turn.
+5. Validate before building when possible; always read the actual errors. Fix the root cause with a targeted edit on the reported file/line — never regenerate the whole project for a localized error.
+6. Each repair must be based on the latest real error. When a result says "same failure repeated", stop retrying, call diagnose_failure and change strategy.
+7. Files you change are validated automatically at the end of the turn if you didn't run {"kind":"check"}; you only see that result next turn.
 8. Two project types. Static site (default): index.html at the root, relative paths, plain HTML/CSS/JS (ES modules via relative .js imports or full CDN URLs), no npm. React + Vite (when the user asks for React/TypeScript/Vite or package.json already lists vite): keep real React + TypeScript with package.json (react, react-dom, vite, @vitejs/plugin-react, typescript), vite.config.ts, tsconfig.json, root index.html loading /src/main.tsx and .tsx files under src/; create package.json and vite.config.ts first; npm imports are fine — a separate build runtime compiles it after your turn. Never convert a React/TypeScript request into a CDN or plain-JS site.
 9. New project? Create the files directly (still keep them small and linked correctly), then build.
 At most 8 actions per turn. When the work is complete and the last build passed, reply with "actions": [] and "done": true, and a short final summary of what the user can try in the preview.
