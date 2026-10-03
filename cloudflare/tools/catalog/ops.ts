@@ -213,22 +213,17 @@ export const recoveryTools = [
     handler: async (_a, env) => {
       if (!validateProject(await env.files()).errors.length) return { data: { recovered: false, reason: "Current version already validates" } };
       await env.commit("Before recovery");
-      const { listRevisions, loadStore, rollbackTo } = await import("../../sandbox/fs.server");
+      const { listRevisions, rollbackTo } = await import("../../sandbox/fs.server");
       const revs = (await listRevisions(env.projectId, 21)).map((r) => r.revision);
       const cur = revs[0] ?? 0;
-      // Walk back by applying inverse revisions to an in-memory copy; first clean state wins.
-      const { revisionChanges } = await import("../../sandbox/fs.server");
-      void revisionChanges;
+      // rollbackTo always reconstructs the exact state at `target` (it reverts every later revision, including earlier probes).
       for (const target of revs.slice(1)) {
-        const probe = await loadStore(env.projectId);
-        void probe;
-        // Rollback is itself a revision, so test on a throwaway projection: rollback then re-validate, undo if still broken.
         const r = await rollbackTo(env.projectId, target, { taskId: env.taskId });
         env.invalidate();
         if (!validateProject(await env.files()).errors.length) return { data: { recovered: true, restoredRevision: target, newRevision: r.revision }, stateChanges: [{ kind: "revision", target: String(target), detail: "recovered" }] };
-        await rollbackTo(env.projectId, r.revision - 1, { taskId: env.taskId }).catch(() => undefined);
-        env.invalidate();
       }
+      await rollbackTo(env.projectId, cur, { taskId: env.taskId }).catch(() => undefined);
+      env.invalidate();
       throw new ToolFailure("UNKNOWN_ERROR", `No valid revision found in the last ${revs.length} (current ${cur})`, false, undefined, "diagnose_failure");
     },
   }),
