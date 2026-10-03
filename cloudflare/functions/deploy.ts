@@ -39,6 +39,8 @@ const stored = await listStored(storeId);
 // Sandbox D1 (project codebases) is found or created by name, and its migrations applied.
 const { ensureSandboxDb } = await import("../sandbox/setup");
 const sandboxDbId = await ensureSandboxDb();
+const { migrateMain } = await import("../sandbox/setup");
+await migrateMain(env["CLOUDFLARE_D1_DATABASE_ID"]!);
 const settings = (await (await fetch(`${API}/scripts/${NAME}/settings`, { headers: auth })).json()) as { result?: { bindings?: { type: string; name: string }[] } };
 const hasTasks = (settings.result?.bindings ?? []).some((b) => b.name === "TASKS");
 const metadata = {
