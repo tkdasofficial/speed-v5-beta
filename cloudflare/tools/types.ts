@@ -68,6 +68,8 @@ export interface ToolEnv {
 }
 
 export interface ToolDefinition<S extends z.ZodTypeAny = z.ZodTypeAny> {
+  /** Set on canonical aliases: the real tool this name runs. */
+  aliasOf?: string;
   name: string;
   category: Category;
   description: string;

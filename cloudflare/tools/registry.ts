@@ -49,18 +49,52 @@ export function registerTool(t: ToolDefinition) {
   if (tools.has(t.name)) throw new Error(`Duplicate tool ${t.name}`);
   tools.set(t.name, t);
 }
-export const getTool = (name: string) => tools.get(name) ?? null;
+// Canonical aliases: a canonical spec name that resolves to an existing implementation (optionally with fixed
+// arguments), so one capability never exists twice. Aliases are not separate tools: they share the target's handler,
+// permissions, policy and audit path, and are excluded from allTools().
+export interface AliasSpec { target: string; preset?: Record<string, unknown>; note?: string }
+const aliases = new Map<string, AliasSpec>();
+const aliasDefs = new Map<string, ToolDefinition>();
+
+export function registerAlias(name: string, spec: AliasSpec) {
+  if (!/^[a-z][a-z0-9_]{1,59}$/.test(name)) throw new Error(`bad alias name ${name}`);
+  if (tools.has(name) || aliases.has(name)) throw new Error(`Duplicate tool/alias ${name}`);
+  aliases.set(name, spec);
+}
+
+function aliasDef(name: string): ToolDefinition | null {
+  const cached = aliasDefs.get(name); if (cached) return cached;
+  const spec = aliases.get(name); if (!spec) return null;
+  const t = tools.get(spec.target); if (!t) return null;
+  let schema: z.ZodTypeAny = t.inputSchema;
+  const preset = spec.preset;
+  if (preset && Object.keys(preset).length) {
+    if (!(t.inputSchema instanceof z.ZodObject)) throw new Error(`alias ${name}: preset needs an object schema on ${t.name}`);
+    const keys = Object.fromEntries(Object.keys(preset).map((k) => [k, true as const]));
+    schema = (t.inputSchema as z.ZodObject<z.ZodRawShape>).omit(keys).strict().transform((v) => ({ ...v, ...preset }));
+  }
+  const d: ToolDefinition = {
+    ...t, name, inputSchema: schema, aliasOf: t.name,
+    description: `${t.description}${spec.note ? ` ${spec.note}` : ""} (canonical name; runs ${t.name}${preset ? ` with ${JSON.stringify(preset)}` : ""})`,
+  };
+  aliasDefs.set(name, d);
+  return d;
+}
+
+export const getTool = (name: string) => tools.get(name) ?? aliasDef(name);
 export const allTools = () => [...tools.values()];
+export const allAliases = () => [...aliases.entries()].map(([name, a]) => ({ name, ...a }));
 export const getToolsByCategory = (c: Category) => allTools().filter((t) => t.category === c);
 
 /** Lightweight metadata for the agent: never the handler, only what it needs to call the tool. */
 export function getToolMetadata(name: string) {
   const t = getTool(name);
   if (!t) return null;
-  return { name: t.name, category: t.category, description: t.description, args: describeArgs(t.inputSchema), readOnly: t.readOnly, destructive: t.destructive, requiresConfirmation: t.requiresConfirmation };
+  return { name: t.name, ...(t.aliasOf ? { aliasOf: t.aliasOf } : {}), category: t.category, description: t.description, args: describeArgs(t.inputSchema), readOnly: t.readOnly, destructive: t.destructive, requiresConfirmation: t.requiresConfirmation };
 }
 
 function describeArgs(s: z.ZodTypeAny): string {
+  if (s instanceof z.ZodEffects) return describeArgs(s.innerType());
   const shape = s instanceof z.ZodObject ? (s.shape as Record<string, z.ZodTypeAny>) : null;
   if (!shape) return "{}";
   return `{${Object.entries(shape).map(([k, v]) => `${k}${v.isOptional() ? "?" : ""}`).join(", ")}}`;
@@ -70,7 +104,8 @@ function describeArgs(s: z.ZodTypeAny): string {
 export function findToolsByCapability(capability: string, opts: { limit?: number; readOnly?: boolean } = {}) {
   const words = capability.toLowerCase().replace(/[^a-z0-9_ ]/g, " ").split(/\s+/).filter((w) => w.length > 2);
   if (!words.length) return [];
-  const exact = getTool(capability.trim().toLowerCase().replace(/\s+/g, "_"));
+  const exactName = capability.trim().toLowerCase().replace(/\s+/g, "_");
+  const exact = tools.get(exactName) ?? (aliases.has(exactName) ? tools.get(aliases.get(exactName)!.target) ?? null : null);
   const scored = allTools()
     .filter((t) => !opts.readOnly || t.readOnly)
     .map((t) => {
@@ -83,7 +118,10 @@ export function findToolsByCapability(capability: string, opts: { limit?: number
     .filter((x) => x.s > 0)
     .sort((a, b) => b.s - a.s)
     .slice(0, opts.limit ?? 6);
-  return scored.map((x) => getToolMetadata(x.t.name)!);
+  const out = scored.map((x) => getToolMetadata(x.t.name)!);
+  // A canonical alias asked for by name is returned as itself (first), so the agent can call the spec name.
+  if (aliases.has(exactName) && getTool(exactName)) out.unshift(getToolMetadata(exactName)!);
+  return out.slice(0, opts.limit ?? 6);
 }
 
-export function _resetRegistryForTests() { tools.clear(); }
+export function _resetRegistryForTests() { tools.clear(); aliases.clear(); aliasDefs.clear(); }
