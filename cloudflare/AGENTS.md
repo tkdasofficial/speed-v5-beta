@@ -30,3 +30,4 @@
 - Commands (install/build/typecheck/lint/test/format/script) run only as `runtime_jobs` in the `speed-runtime` `run.yml` workflow (`functions/build/jobs.server.ts`, single-use job tokens); the Worker never runs a shell.
 - Main-D1 migrations are applied by deploy through `migrateMain` (tracked in `_migrations`), so new `cloudflare/migrations/*.sql` files reach production on the next deploy.
 - `web_search` uses only free public sources (SearXNG instances, DuckDuckGo, Wikipedia, Reddit) queried in parallel in `tools/catalog/websearch.ts`, merged by canonical URL; a failed source becomes a warning, so search needs no keys or secrets.
+- Canonical spec names served by an existing tool are registered as aliases in `tools/aliases.ts` (target + optional fixed args), never as new tools, so each capability has one implementation, one permission set and one audit path.
