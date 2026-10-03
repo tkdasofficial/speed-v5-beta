@@ -157,29 +157,21 @@ const KINDS: AgentActionKind[] = ["read", "create", "edit", "delete", "think", "
 const WRITE_TOOLS = new Set(["create_file", "edit_file", "patch_file", "delete_file", "rename_file", "move_file", "rollback_change", "build_project", "build_static"]);
 const WRITE_KINDS: AgentActionKind[] = ["create", "edit", "delete", "check"];
 
-const LOOP_RULES = `You are a codebase editing agent working in a loop. Each turn reply with ONLY one JSON object, no prose:
+const LOOP_RULES = (tools: string) => `You are a codebase editing agent working in a loop. Each turn reply with ONLY one JSON object, no prose:
 {"message": "1-3 short sentences to the user: what you found/did and what's next", "actions": [...], "done": false}
-Actions run on the project's real files; their results come back to you next turn.
-Call internal tools as {"kind":"tool","name":"<tool>","args":{...}}. Tools:
-DISCOVER: list_files{dir?}, list_directories, get_file_tree, file_exists{path}, get_file_metadata{path}
-SEARCH (line numbers): search_text{query, mode?:"exact"|"fuzzy"|"regex", ext?:["css"], dir?}, search_filename{query}, find_html_elements{selector:"button.hero-cta"|"#id"|"nav"}, find_css_selectors{selector:".hero-cta"}, find_js_symbols{name}, find_references{name}, find_imports{path?}, find_exports{path?}
-INSPECT: read_file{path}, read_file_range{path,start,end}, get_file_outline{path}, get_code_context{path,line,radius?}
-UNDERSTAND: analyze_file_dependencies{path}, get_dependency_graph, find_related_files{path}, find_asset_references{path?}, find_broken_references
-EDIT (targeted): edit_file{path,find,replace,reason} (find must be exact and unique), patch_file{path,edits:[{find,replace}],reason}, create_file{path,content,reason} (new files or full rewrite only when needed), delete_file{path} (refuses while referenced), rename_file{path,name}, move_file{path,to}
-VALIDATE: validate_project, validate_html|validate_css|validate_javascript|validate_json{path}, validate_references, validate_assets
-BUILD: build_project (validates .local, builds into a staged output, swaps .output only on success; a failed build keeps the last good .output), get_build_status, get_build_logs
-ERRORS: get_errors, get_error_context{path,line}, find_related_error_files{path}, classify_error{message}
-CHANGES: get_changed_files, get_change_diff{path?|change?}, rollback_change{change?} (undo your own bad edit before retrying)
-PREVIEW: check_preview (verifies built assets resolve), capture_preview_errors (runtime script errors)
-Also allowed: {"kind":"think","note":"short plan"}.
-RULES:
+Actions run on the project's real files through the tool orchestrator; structured results (success, error code, nextRecommendedAction) come back to you next turn.
+Shorthands: {"kind":"read","path"}, {"kind":"create","path","content"}, {"kind":"edit","path","find","replace"} (or "content" for a full rewrite), {"kind":"delete","path"}, {"kind":"check"} (validates the project), {"kind":"think","note"}.
+Any other tool: {"kind":"tool","name":"<tool>","args":{...}}. Tools for this phase (args with ? are optional; ! = destructive):
+${tools}
+Need a capability not listed? Call find_tools{capability:"..."} — the orchestrator returns the right tool.`;
+const RULES = `RULES:
 1. Never guess a file location when the codebase can be searched. Search before editing; read the relevant lines before modifying.
-2. .local is the source of truth (paths are relative to it). .output is generated and read-only — never edit it; change .local and rebuild.
+2. Paths are project-relative. Generated output (.output, node_modules) and secret files are protected — never edit them.
 3. Make the smallest possible change: touch only the files needed, preserve unrelated code, styles and behaviour; no refactors or renames unless required. CSS-only requests change only CSS.
 4. If HTML and JS/CSS must change together, confirm the relationship (selectors, ids, imports) first.
-5. Validate before building when possible; always read the actual build errors. Fix the root cause with a targeted edit on the reported file/line — never regenerate the whole project for a localized error.
-6. Each repair must be based on the latest real error. After repeated failure, stop and explain the remaining error.
-7. Files you change are built automatically at the end of the turn if you didn't call build_project; you only see that result next turn.
+5. Validate before building when possible; always read the actual errors. Fix the root cause with a targeted edit on the reported file/line — never regenerate the whole project for a localized error.
+6. Each repair must be based on the latest real error. When a result says "same failure repeated", stop retrying, call diagnose_failure and change strategy.
+7. Files you change are validated automatically at the end of the turn if you didn't run {"kind":"check"}; you only see that result next turn.
 8. Two project types. Static site (default): index.html at the root, relative paths, plain HTML/CSS/JS (ES modules via relative .js imports or full CDN URLs), no npm. React + Vite (when the user asks for React/TypeScript/Vite or package.json already lists vite): keep real React + TypeScript with package.json (react, react-dom, vite, @vitejs/plugin-react, typescript), vite.config.ts, tsconfig.json, root index.html loading /src/main.tsx and .tsx files under src/; create package.json and vite.config.ts first; npm imports are fine — a separate build runtime compiles it after your turn. Never convert a React/TypeScript request into a CDN or plain-JS site.
 9. New project? Create the files directly (still keep them small and linked correctly), then build.
 At most 8 actions per turn. When the work is complete and the last build passed, reply with "actions": [] and "done": true, and a short final summary of what the user can try in the preview.
@@ -212,11 +204,11 @@ function parseStep(text: string): { message: string; actions: AgentStepAction[];
   } catch { return null; }
 }
 
-export async function runAgentRound(input: { model: AiModel; depth: AiDepth; plan?: boolean; history: Msg[]; projectName: string; round: number; files: string[]; results: string; approvedPlan?: string }) {
+export async function runAgentRound(input: { model: AiModel; depth: AiDepth; plan?: boolean; history: Msg[]; projectName: string; round: number; files: string[]; results: string; approvedPlan?: string; tools: string }) {
   const d = DEPTH[input.depth];
   // Safety runs in parallel with the main call so it never adds latency.
   const safe = input.round === 0 && !input.approvedPlan ? isSafe(input.history[input.history.length - 1]?.content ?? "") : Promise.resolve(true);
-  const system = `You are Speed, an AI software agent building the project "${input.projectName}". ${d.guide}\n${LOOP_RULES}${input.plan ? PLAN_LOOP : ""}`;
+  const system = `You are Speed, an AI software agent building the project "${input.projectName}". ${d.guide}\n${LOOP_RULES(input.tools)}\n${RULES}${input.plan ? PLAN_LOOP : ""}`;
   const approved = input.approvedPlan ? `APPROVED PLAN (implement all of it; every listed file must exist, be linked and contain the requested design/behaviour):\n${input.approvedPlan}\n` : "";
   const state = `${approved}Turn ${input.round + 1}. Project files (${input.files.length}): ${input.files.length ? input.files.join(", ") : "(empty project)"}\n${input.results ? `Results of your last actions:\n${input.results}` : "No actions run yet."}\nReply with the JSON object only.`;
   const messages: Msg[] = [{ role: "system", content: system }, ...input.history.slice(-d.history), { role: "user", content: state }];
