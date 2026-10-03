@@ -160,70 +160,60 @@ async function buildStep(c: TaskContext, st: State, p: P): Promise<StepResult> {
   await c.emit("step", { label: "Thinking", round });
   await prog("Thinking");
 
-  const { store, revision } = await fs.loadStore(pid);
-  const before = fs.snapshotStore(store);
+  const { store } = await fs.loadStore(pid);
+  const existing = new Set(store.list().map((f) => f.path));
   const hist = await d1<{ role: "user" | "assistant"; content: string }>(
     "SELECT role, content FROM (SELECT role, content, created_at, rowid AS r FROM messages WHERE conversation_id = ? AND role IN ('user','assistant') ORDER BY created_at DESC, r DESC LIMIT 12) ORDER BY created_at, r", [pid]);
   const [proj] = await d1<{ name: string }>("SELECT name FROM projects WHERE id = ?", [pid]);
   const { runAgentRound, planText } = await import("../../functions/ai/orchestrator.server");
-  const step = await withCancel(c, runAgentRound({ model: p.model ?? "speed", depth: p.depth ?? "balanced", plan: false, projectName: proj?.name ?? "project", round, files: store.list().map((f) => f.path).sort(), results: st.results ?? "", history: hist, ...(st.plan ? { approvedPlan: planText(st.plan) } : {}) }));
+  const { loadTools } = await import("../../tools/index");
+  const { catalogText } = await import("../../tools/exposure");
+  loadTools();
+  const step = await withCancel(c, runAgentRound({ model: p.model ?? "speed", depth: p.depth ?? "balanced", plan: false, projectName: proj?.name ?? "project", round, files: store.list().map((f) => f.path).sort(), results: st.results ?? "", history: hist, tools: catalogText("building"), ...(st.plan ? { approvedPlan: planText(st.plan) } : {}) }));
   if (!step) return { done: false, delayMs: 10 };
   await c.emit("model", { stage: "build", round, model: step.usedModel, fallbacks: step.fallbacks as unknown as Json });
   if (await c.cancelled()) return { done: false, delayMs: 10 };
   if (step.message && (step.actions.length || !step.done)) await say(c, st, step.message);
 
-  const { WRITE_TOOLS, BUILD_TOOLS, formatToolResult } = await import("../../../sandbox/intelligence/tools");
-  const tools = await makeTools(store);
+  // Every action goes through the ToolOrchestrator: policy → args → prerequisites → execute → audit (tool_operations).
+  const sess = await session(c);
   await c.emit("step", { label: "Working", round });
   const log: string[] = [];
-  let built: boolean | null = null, wrote = false, stopped = false;
+  let built: boolean | null = null, stopped = false;
   const failedIds = st.failedIds ?? [];
   const created = new Set(st.created ?? []);
   for (const s of step.actions as Step[]) {
     // Cancellation is honoured between actions: no new file change starts after Stop.
-    if (await c.cancelled()) { stopped = true; break; }
+    if (await c.cancelled()) { stopped = true; sess.cancel(); break; }
     if (s.kind === "think") { await act(c, st, { kind: "think", running: "Thinking", done: s.note ? `Planned: ${s.note.slice(0, 120)}` : "Planned next step", round }, () => ({ ok: true })); log.push("think: noted"); continue; }
     const { name, args } = toTool(s);
-    if (BUILD_TOOLS.has(name)) {
-      const r = await act(c, st, { ...labels(name, null), round }, () => {
-        const res = tools.run(name, args);
-        log.push(formatToolResult(name, res));
-        const ok = res.success && (res.data as { ok: boolean }).ok;
-        return { ok, ...(ok ? {} : { error: formatToolResult(name, res).slice(0, 600) }) };
-      });
-      built = r.ok; if (!r.ok) failedIds.push(r.id);
-      continue;
-    }
-    const target = typeof args["path"] === "string" ? (args["path"] as string) : typeof args["query"] === "string" ? `"${args["query"] as string}"` : typeof args["selector"] === "string" ? (args["selector"] as string) : null;
-    // A file in a folder that doesn't exist yet also creates the folder: shown as its own action.
-    if (name === "create_file" && target && target.includes("/")) {
-      const dir = target.slice(0, target.lastIndexOf("/"));
-      const exists = store.folders().includes(dir) || store.list().some((f) => f.path.startsWith(`${dir}/`));
-      if (!exists) await act(c, st, { kind: "create", running: `Creating ${dir}/`, done: `Created ${dir}/`, round }, () => { store.addFolder(dir); return { ok: true }; });
-    }
-    const L = labels(name, target);
-    const r = await act(c, st, { kind: L.kind, running: L.running, done: L.done, failed: L.failed, round }, () => {
-      const res = tools.run(name, args);
-      log.push(formatToolResult(name, res));
-      return res.success ? { ok: true } : { ok: false, error: res.error.message };
+    if (!name) continue;
+    const target = typeof args["path"] === "string" ? (args["path"] as string) : typeof args["query"] === "string" ? `"${args["query"] as string}"` : typeof args["name"] === "string" ? (args["name"] as string) : null;
+    const L = VERIFY.has(name) ? labels("verify_project", null) : labels(name, target);
+    const r = await act(c, st, { kind: L.kind, running: L.running, done: L.done, failed: L.failed, round }, async () => {
+      const res = await sess.execute(name, args);
+      log.push(fmt(res));
+      const ok = VERIFY.has(res.toolName) ? verifyOk(res) : res.success;
+      return ok ? { ok: true } : { ok: false, error: (res.error?.message ?? fmt(res)).slice(0, 600) };
     });
+    if (VERIFY.has(name)) built = r.ok;
     if (!r.ok) failedIds.push(r.id);
-    if (r.ok && WRITE_TOOLS.has(name)) { wrote = true; if (name === "create_file" && target && !before.files.has(target)) created.add(target); }
+    if (r.ok && target && (name === "write_file" || name === "create_file") && !existing.has(target)) created.add(target);
   }
   st.created = [...created].slice(0, 200);
+  const wrote = sess.pendingChanges.length > 0;
   if (wrote && built === null && !stopped) {
-    const r = await act(c, st, { kind: "check", running: "Checking project", done: "Check passed", failed: "Check failed", round }, () => {
-      const res = tools.run("build_project");
-      log.push(`(automatic) ${formatToolResult("build_project", res)}`);
-      const ok = res.success && (res.data as { ok: boolean }).ok;
-      return { ok, ...(ok ? {} : { error: formatToolResult("build_project", res).slice(0, 600) }) };
+    const r = await act(c, st, { kind: "check", running: "Checking project", done: "Check passed", failed: "Check failed", round }, async () => {
+      const res = await sess.execute("verify_project", {});
+      log.push(`(automatic) ${fmt(res)}`);
+      return verifyOk(res) ? { ok: true } : { ok: false, error: fmt(res).slice(0, 600) };
     });
     built = r.ok; if (!r.ok) failedIds.push(r.id);
   }
-  // Persist the round's changes as one revision (conflicts retry the whole round from fresh files).
+  // Persist the round's changes as one revision through the session (conflicts surface as CONFLICT results).
   if (wrote) {
     await prog("Saving changes", 0.9);
-    const r = await fs.commit(pid, revision, before, store, { taskId: c.task.id, label: step.message.slice(0, 80) });
+    const r = await sess.commit(step.message.slice(0, 80) || "Agent changes");
     if (r.changed.length) {
       st.mutated = true;
       st.changed = [...new Set([...(st.changed ?? []), ...r.changed])].slice(0, 200);
