@@ -19,7 +19,7 @@ function resources(args: Record<string, unknown>): string[] {
 
 export function planParallel(calls: ParallelCall[], ctx: { projectId: string; readOnly: boolean; confirmed: boolean }) {
   const rejected: Rejection[] = [];
-  const writes = new Map<string, number>();
+  const touches = new Map<string, { index: number; write: boolean }>();
   const seen = new Map<string, number>();
   calls.forEach((c, index) => {
     const tool = getTool(c.tool);
@@ -34,11 +34,11 @@ export function planParallel(calls: ParallelCall[], ctx: { projectId: string; re
     const key = `${tool.name}:${JSON.stringify(rest)}`;
     if (seen.has(key)) return rejected.push({ index, tool: c.tool, code: "CONFLICT", reason: `duplicate of call #${seen.get(key)}` });
     seen.set(key, index);
-    if (!tool.readOnly) {
-      for (const r of resources(rest)) {
-        if (writes.has(r)) return rejected.push({ index, tool: c.tool, code: "CONFLICT", reason: `writes ${r} which call #${writes.get(r)} also writes` });
-        writes.set(r, index);
-      }
+    // A write may not overlap any other call on the same resource (write/write or read/write races).
+    for (const r of resources(rest)) {
+      const prev = touches.get(r);
+      if (prev && (prev.write || !tool.readOnly)) return rejected.push({ index, tool: c.tool, code: "CONFLICT", reason: `${tool.readOnly ? "reads" : "writes"} ${r} which call #${prev.index} ${prev.write ? "writes" : "reads"}` });
+      if (!prev || !tool.readOnly) touches.set(r, { index, write: !tool.readOnly });
     }
     return undefined;
   });
