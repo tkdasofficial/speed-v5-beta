@@ -1,5 +1,6 @@
 // Categories 1–4: workspace files, discovery, search/research, code analysis (tools 1–33).
 import { defineTool } from "../registry";
+import { webSearchTool } from "./websearch";
 import { z, P, ToolFailure, safeToolPath, getFile, visible, write, remove, detect, detectRoutes, importedPackages, fetchJson, gh, TEXT_EXT } from "./util";
 import { searchText, searchFilename, outline } from "../../../sandbox/intelligence/search";
 import { validateProject, validateFile, validateTs, validateViteExports, isViteProject } from "../../../sandbox/intelligence/validate";
@@ -183,23 +184,7 @@ export const fileTools = [
       return { data: { results: ranked } };
     },
   }),
-  defineTool({
-    name: "web_search", category: "search", description: "Search the web (DuckDuckGo instant answers + Wikipedia).", requiredPermissions: ["network:fetch"], projectScoped: false, timeoutMs: 20_000,
-    retryPolicy: { maxAttempts: 2, backoffMs: 500 }, inputSchema: z.object({ query: z.string().min(2).max(300) }),
-    handler: async (a, env) => {
-      const [ddg, wiki] = await Promise.all([
-        fetchJson<{ Heading?: string; AbstractText?: string; AbstractURL?: string; RelatedTopics?: { Text?: string; FirstURL?: string }[] }>(`https://api.duckduckgo.com/?q=${encodeURIComponent(a.query)}&format=json&no_html=1&skip_disambig=1`, {}, env).catch(() => null),
-        fetchJson<{ query?: { search?: { title: string; snippet: string }[] } }>(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(a.query)}&format=json&srlimit=5&origin=*`, {}, env).catch(() => null),
-      ]);
-      const results = [
-        ...(ddg?.body.AbstractText ? [{ title: ddg.body.Heading ?? a.query, snippet: ddg.body.AbstractText, source: ddg.body.AbstractURL ?? "duckduckgo" }] : []),
-        ...(ddg?.body.RelatedTopics ?? []).filter((t) => t.Text && t.FirstURL).slice(0, 5).map((t) => ({ title: t.Text!.slice(0, 80), snippet: t.Text!, source: t.FirstURL! })),
-        ...(wiki?.body.query?.search ?? []).map((r) => ({ title: r.title, snippet: r.snippet.replace(/<[^>]+>/g, ""), source: `https://en.wikipedia.org/wiki/${encodeURIComponent(r.title.replace(/ /g, "_"))}` })),
-      ];
-      if (!ddg && !wiki) throw new ToolFailure("INTEGRATION_FAILED", "Search providers unreachable", true);
-      return { data: { query: a.query, results } };
-    },
-  }),
+  webSearchTool,
   defineTool({
     name: "docs_search", category: "search", description: "Search developer documentation (MDN).", requiredPermissions: ["network:fetch"], projectScoped: false, retryPolicy: { maxAttempts: 2, backoffMs: 500 },
     inputSchema: z.object({ query: z.string().min(2).max(200) }),
