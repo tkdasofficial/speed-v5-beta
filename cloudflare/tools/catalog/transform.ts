@@ -103,10 +103,42 @@ export const transformTools = [
       const p = safeToolPath(`src/pages/${N}.${ts ? "tsx" : "jsx"}`);
       if (s.get(p)) throw new ToolFailure("CONFLICT", `${p} already exists`);
       write(env, s, p, `export default function ${N}() {\n  return (\n    <main>\n      <h1>${title}</h1>\n    </main>\n  );\n}\n`);
-      return { data: { path: p, component: N, note: "Register it in the app's router" }, stateChanges: [{ kind: "file", target: p, detail: "created" }], next: "analyze_routes" };
+      const changes = [{ kind: "file" as const, target: p, detail: "created" }];
+      // Register the route: TanStack/file-based routers pick the file up by location; react-router <Routes> gets a <Route>.
+      const routePath = `/${a.name}`;
+      const fileRouter = s.list().some((f) => /^src\/routes\/__root\.[jt]sx$/.test(f.path)) ? "tanstack" : s.list().some((f) => /^(src\/)?app\/layout\.[jt]sx$/.test(f.path)) ? "next-app" : null;
+      if (fileRouter === "tanstack") {
+        const rp = `src/routes/${a.name}.${ts ? "tsx" : "jsx"}`;
+        if (s.get(rp)) throw new ToolFailure("CONFLICT", `${rp} already exists`);
+        write(env, s, rp, `import { createFileRoute } from "@tanstack/react-router";\nimport ${N} from "../pages/${N}";\n\nexport const Route = createFileRoute("${routePath}")({\n  head: () => ({ meta: [{ title: ${JSON.stringify(title)} }] }),\n  component: ${N},\n});\n`);
+        changes.push({ kind: "file", target: rp, detail: "route created" });
+        return { data: { path: p, component: N, route: routePath, routeFile: rp, router: "tanstack" }, stateChanges: changes, next: "verify_project" };
+      }
+      const host = s.list().find((f) => f.encoding === "utf8" && /\.[jt]sx$/.test(f.path) && /<Routes[\s>]/.test(f.content) && /react-router/.test(f.content));
+      if (host) {
+        const rel = `./${pathRel(host.path, p).replace(/\.[jt]sx$/, "")}`.replace(/^\.\/\.\.\//, "../");
+        let c = host.content;
+        if (!c.includes(`<Route path="${routePath}"`)) {
+          c = c.replace(/(<Routes[^>]*>)/, `$1\n        <Route path="${routePath}" element={<${N} />} />`);
+          const lastImport = [...c.matchAll(/^import .*;$/gm)].pop();
+          const imp = `import ${N} from "${rel}";`;
+          c = lastImport ? c.slice(0, lastImport.index! + lastImport[0].length) + `\n${imp}` + c.slice(lastImport.index! + lastImport[0].length) : `${imp}\n${c}`;
+          write(env, s, host.path, c); changes.push({ kind: "file", target: host.path, detail: `route ${routePath} registered` });
+        }
+        return { data: { path: p, component: N, route: routePath, routeFile: host.path, router: "react-router" }, stateChanges: changes, next: "verify_project" };
+      }
+      return { data: { path: p, component: N, route: null, note: "No router found (single-page app); render the component where it should appear or add a router" }, stateChanges: changes, next: "analyze_routes" };
     },
   }),
 ];
+
+/** Relative module path from one file to another (POSIX). */
+function pathRel(from: string, to: string) {
+  const a = from.split("/").slice(0, -1), b = to.split("/");
+  let i = 0; while (i < a.length && i < b.length - 1 && a[i] === b[i]) i++;
+  const up = a.length - i;
+  return `${up ? "../".repeat(up) : ""}${b.slice(i).join("/")}`;
+}
 
 // ---------------- assets ----------------
 const MIME: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", avif: "image/avif", svg: "image/svg+xml", ico: "image/x-icon", woff: "font/woff", woff2: "font/woff2", ttf: "font/ttf", otf: "font/otf", mp3: "audio/mpeg", mp4: "video/mp4", webm: "video/webm", pdf: "application/pdf" };
