@@ -26,3 +26,6 @@
 - Every artifact passes root `.output.build.ts` (validate, keep multi-file, relativize root paths, no secrets) before it is stored, so previews work under any base path.
 - Persistent data lives in Google Drive `users/{userId}/projects/{projectId}/{source,static,assets,metadata}`; folder IDs and hashes are kept in project settings so Drive is never re-scanned, and the artifact pointer switches only after a successful upload.
 - Preview is served only through short-lived signed sessions (`openPreviewSession` → `/preview/s/{token}/`, scoped to userId + projectId + sessionId, CSP sandbox); sessions are stateless and expire, so none can be orphaned or reach another project.
+- Agent tools all go through the ToolOrchestrator (`cloudflare/tools/`, catalogs registered in `tools/index.ts`); each agent phase sees only its categories via `tools/exposure.ts` and reaches the rest through find_tools, so the model never gets the full catalog.
+- Commands (install/build/typecheck/lint/test/format/script) run only as `runtime_jobs` in the `speed-runtime` `run.yml` workflow (`functions/build/jobs.server.ts`, single-use job tokens); the Worker never runs a shell.
+- Main-D1 migrations are applied by deploy through `migrateMain` (tracked in `_migrations`), so new `cloudflare/migrations/*.sql` files reach production on the next deploy.
