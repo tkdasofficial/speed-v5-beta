@@ -1,4 +1,4 @@
-import { test, expect } from "vitest";
+import { test, expect } from "bun:test";
 import { loadTools } from "./index";
 import { toolsForPhase, catalogText } from "./exposure";
 import { COMMAND_MAP, resolveCommand } from "./policy";
