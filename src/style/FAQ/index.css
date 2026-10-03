@@ -1,0 +1,41 @@
+/* ============ FAQ page ============ */
+.faq-item summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 13px 14px; font: 600 14px/1.35 "Manrope", ui-sans-serif, system-ui, sans-serif; color: var(--foreground); }
+.faq-item summary::-webkit-details-marker { display: none; }
+.faq-item summary svg { flex: 0 0 18px; width: 18px; height: 18px; color: var(--muted-foreground); transition: transform 0.18s ease; }
+.faq-item[open] summary svg { transform: rotate(180deg); }
+.faq-item[open] summary { border-bottom: 1px solid var(--border); }
+.faq-item .faq-a { margin: 0; padding: 12px 14px 14px; font: 400 13px/1.6 "Manrope", ui-sans-serif, system-ui, sans-serif; color: var(--muted-foreground); }
+
+/* Dashboard light-bulb button → FAQ link (appearance identical to the old button) */
+.dashboard-mobile-head .faq-lamp { width: 31px; height: 31px; display: grid; place-items: center; color: var(--foreground); background: transparent; border: 0; text-decoration: none; -webkit-tap-highlight-color: transparent; }
+.faq-wrap { width: 100%; max-width: 680px; min-width: 0; flex-shrink: 0; margin: 0 auto; padding: 0 2px 24px; box-sizing: border-box; }
+.faq-hero { text-align: center; padding: 24px 0 18px; }
+.faq-eyebrow { display: inline-block; font: 700 11px/1 "Manrope", sans-serif; letter-spacing: .08em; text-transform: uppercase; color: var(--muted-foreground); border: 1px solid var(--border); border-radius: 999px; padding: 6px 10px; }
+.faq-hero h1 { margin: 14px 0 8px; font: 700 clamp(24px, 6vw, 34px)/1.15 "Manrope", sans-serif; letter-spacing: -.02em; color: var(--foreground); }
+.faq-hero p { margin: 0 auto 18px; max-width: 420px; font: 400 14px/1.55 "Manrope", sans-serif; color: var(--muted-foreground); }
+.faq-search { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
+.faq-search:focus-within { border-color: #1D4ED8; }
+.faq-search svg { width: 17px; height: 17px; color: var(--muted-foreground); }
+.faq-search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--foreground); font: 500 14px "Manrope", sans-serif; }
+.faq-tabs { min-width: 0; max-width: 100%; display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 6px; scrollbar-width: none; }
+.faq-tabs button { flex: 0 0 auto; height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--muted-foreground); font: 500 13px "Manrope", sans-serif; cursor: pointer; }
+.faq-tabs button.is-on { background: #F5F5F5; color: #000; border-color: #F5F5F5; }
+.faq-group { margin-top: 18px; }
+.faq-group h2 { margin: 0 0 8px 2px; font: 700 12px/1 "Manrope", sans-serif; letter-spacing: .06em; text-transform: uppercase; color: var(--muted-foreground); }
+.faq-list { display: grid; gap: 8px; }
+.faq-item { background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; transition: border-color .15s; }
+.faq-item:hover, .faq-item[open] { border-color: color-mix(in oklab, var(--foreground) 22%, transparent); }
+.faq-empty { text-align: center; padding: 28px 0; color: var(--muted-foreground); font: 400 14px "Manrope", sans-serif; }
+.faq-contact { margin-top: 26px; display: flex; align-items: center; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
+.faq-contact > svg { flex: 0 0 20px; width: 20px; height: 20px; color: var(--foreground); }
+.faq-contact div { flex: 1; min-width: 0; }
+.faq-contact b { display: block; font: 600 14px "Manrope", sans-serif; color: var(--foreground); }
+.faq-contact p { margin: 2px 0 0; font: 400 12.5px/1.45 "Manrope", sans-serif; color: var(--muted-foreground); }
+.faq-contact-btn { height: 34px; padding: 0 14px; display: grid; place-items: center; border-radius: 8px; background: #F5F5F5; color: #000 !important; font: 600 13px "Manrope", sans-serif; text-decoration: none; }
+
+.sp-page .faq-item { border: 1px solid var(--border); border-radius: 16px; background: linear-gradient(180deg, var(--card), var(--background)); transition: border-color .2s; }
+.sp-page .faq-item[open], .sp-page .faq-item:hover { border-color: color-mix(in oklab, var(--foreground) 22%, transparent); }
+.sp-page .faq-search input, .sp-page .faq-search { border-radius: 12px; }
+.sp-page .faq-tabs button { border-radius: 999px; font-weight: 600; }
+.sp-page .faq-contact { border-radius: 20px; background: radial-gradient(120% 140% at 0% 0%, color-mix(in oklab, var(--primary) 28%, transparent), transparent 60%), var(--card); border: 1px solid var(--border); }
+.sp-page .faq-contact-btn { border-radius: 10px; background: var(--cta); color: var(--cta-foreground); font-weight: 700; }

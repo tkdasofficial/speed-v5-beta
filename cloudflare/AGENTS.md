@@ -1,0 +1,28 @@
+# Cloudflare backend rules
+
+- Real-time relay is a Cloudflare Worker + per-user Durable Object (`cloudflare/real-time/worker`, deploy with `bun cloudflare/real-time/worker/deploy.ts`); clients join with short-lived HMAC tokens and recover gaps via change_log, so no polling is needed.
+- D1 is accessed only through the Worker's native `DB` binding (`cloudflare/functions/d1.ts`); allowed frontend origins come from the `ALLOWED_ORIGINS` Worker variable, never from code.
+- All email goes through `cloudflare/functions/email/send.server.ts` (Gmail SMTP); only the allowed types in templates.server.ts may be sent, never project-activity emails.
+- Worker secrets come only from the account Secrets Store (`cloudflare/secrets-store.ts`, bound as `secrets_store_secret`, resolved once per request); never plain Worker secrets or code.
+- Repository reads (`githubTree`/`githubFile`, GET /api/github/tree|file) resolve the repo only from `project_repos` for the signed-in owner and validate paths via `github/fs.ts`; clients never pass repo IDs, so no one can read an unlinked repo.
+- Public repository lookups/archives live only in `functions/import/providers.server.ts`; authorized GitHub archives go through `github/client.server.ts` (`ghRaw`). Project rows are created only via `functions/projects.server.ts`.
+- Integrations (multi-account) register in `functions/connect/providers.ts` with their own callbackPath (`/oauth/<provider>[/<service>]/callback`) and verify(); tokens live sealed in D1 `integration_connections` (one row per user+integration+provider account) via `security/connections.server.ts`; GitHub stays on its existing `github_connections` table and is merged into `listIntegrations`, so there is one token system per provider.
+- AI model routing lives only in `functions/ai/orchestrator.server.ts`; clients send validated logical mode/depth and never see provider model IDs or keys.
+
+- Every live-data write goes validate → authorize → D1 write (bump `version`) → `publish()` to change_log + relay; clients never change shared state locally, so the server stays authoritative.
+- GitHub API calls go only through `cloudflare/functions/github/client.server.ts` (auto-refreshed, encrypted per-user tokens from `cloudflare/security/github.server.ts`); tokens never leave the Worker.
+- Every import source (GitHub, GitLab, Bitbucket, ZIP, folder) goes through `cloudflare/functions/import/normalize.ts` into the existing `files` table of a new project (`api/imports.ts`), and imports only report success after the saved file count is checked; one file format, no fake progress.
+- Long-running work runs only as background tasks: rows in main-D1 `tasks`/`task_events`, executed one step per alarm by the `TaskRunner` Durable Object (`cloudflare/tasks/`, binding `TASKS`); features add a handler via `registerTaskType`, so the browser never owns a task's lifecycle.
+- Project codebases live only in the separate `sandbox` D1 (binding `SANDBOX_DB`, `cloudflare/sandbox/fs.server.ts`, migrations in `cloudflare/migrations-sandbox/`, created by deploy); every change is one optimistic revision and is announced as a `filerev` event, so the server is the source of truth.
+- The chat agent is the `ai_agent` task handler (`tasks/handlers/agent.server.ts`) running the `sandbox/intelligence` tools on the server copy of the files.
+- Task progress shown in the UI comes only from persisted task events (`step`, `action`, `message`, `run.end`) and the task row status; the agent ends every run with a summary message built from the real changed files and check result.
+- `ai_agent` tasks run one durable phase machine (planning → awaiting_approval → building → validating → testing → completed | denied | cancelled | failed) in `tasks/handlers/agent.server.ts`; plans park the task via `wait` (no alarm) and resume only through `decideAgentPlan`, and every action emits `action.started` then `action`, so the UI is rebuilt from persisted events alone.
+
+- Project creation from a prompt goes through one idempotent `startProject` call (cloudflare/functions/api/tasks.ts) that saves the original prompt and name metadata in project settings, then starts the first `ai_agent` task; so one action can only make one project and one task.
+
+## Build & preview pipeline
+- Project type routing lives in `build/pipeline.server.ts`: React + Vite projects build in the `tkdasofficial/speed-runtime` GitHub Actions workflow (temporary workspace, output in `.output/dist/`, nothing committed); plain HTML projects skip GitHub and publish their files directly, so both share one artifact path.
+- The runtime pushes `.output/dist` to the project's Drive static folder itself (short-lived access token handed out with the source, never the refresh token), deletes its workspace, then reports the Drive file ID; the Worker verifies the file's folder before switching the pointer, so build output never travels through the Worker.
+- Every artifact passes root `.output.build.ts` (validate, keep multi-file, relativize root paths, no secrets) before it is stored, so previews work under any base path.
+- Persistent data lives in Google Drive `users/{userId}/projects/{projectId}/{source,static,assets,metadata}`; folder IDs and hashes are kept in project settings so Drive is never re-scanned, and the artifact pointer switches only after a successful upload.
+- Preview is served only through short-lived signed sessions (`openPreviewSession` → `/preview/s/{token}/`, scoped to userId + projectId + sessionId, CSP sandbox); sessions are stateless and expire, so none can be orphaned or reach another project.
