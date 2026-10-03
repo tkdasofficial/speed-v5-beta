@@ -15,7 +15,7 @@ const httpUrl = (u: string) => { try { const x = new URL(u); return x.protocol =
 /** Parses DuckDuckGo's HTML results page (exported for tests). Ads and non-http links are dropped. */
 export function parseDuckDuckGo(html: string, n: number): SearchResult[] {
   const out: SearchResult[] = [];
-  const blocks = html.split(/<div[^>]+class="[^"]*\bresult\b[^"]*"/).slice(1);
+  const blocks = html.split(/(?=<div[^>]+class="[^"]*\bresult\b[^"]*")/).slice(1);
   for (const b of blocks) {
     if (/result--ad\b/.test(b.slice(0, 200))) continue;
     const a = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/.exec(b);

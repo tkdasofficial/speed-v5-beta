@@ -246,7 +246,7 @@ describe("recover_project", () => {
     const err = [{ file: "a", message: "x" }];
     expect(decideRecovery(ev({ currentErrors: err, candidates: [{ kind: "snapshot", id: "snap_1", revision: 8, label: "ok", valid: true, filesLost: ["a"] }] }))).toMatchObject({ type: "restore", source: "snapshot", revision: 8 });
     expect(decideRecovery(ev({ currentErrors: err, candidates: [{ kind: "revision", id: null, revision: 9, label: null, valid: false, filesLost: [] }] })).type).toBe("review");
-    expect(decideRecovery(ev({ currentErrors: err, candidates: [{ kind: "revision", id: null, revision: 1, label: null, valid: true, filesLost: [] }] })).type).toBe("review");
+    expect(decideRecovery(ev({ revision: 20, currentErrors: err, candidates: [{ kind: "revision", id: null, revision: 1, label: null, valid: true, filesLost: [] }] })).type).toBe("review");
     expect(decideRecovery(ev({ runningJobs: ["job_1"] })).type).toBe("review");
   });
   const broken = { "index.html": "<script type=module src=./src/main.js></script>", "src/main.js": "import { x } from './missing.js';\nconsole.log(x)" };
