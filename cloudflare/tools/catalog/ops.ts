@@ -276,7 +276,7 @@ export const orchestrationTools = [
     handler: async (a, env) => { const out = await Promise.all(a.calls.map((c) => env.run(c.tool, c.args))); return { data: { results: out.map((r) => ({ tool: r.toolName, operationId: r.operationId, success: r.success, data: r.data, error: r.error })) } }; },
   }),
   oc({
-    name: "execute_sequence", description: "Run dependent tools in order, stopping at the first failure.", readOnly: false, timeoutMs: 180_000,
+    name: "execute_sequence", description: "Run dependent tools in order, stopping at the first failure.", readOnly: false, timeoutMs: 120_000,
     inputSchema: z.object({ calls: z.array(CALL).min(1).max(15), stopOnError: z.boolean().default(true) }),
     handler: async (a, env) => {
       const out = [];
