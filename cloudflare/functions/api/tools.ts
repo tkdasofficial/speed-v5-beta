@@ -25,9 +25,10 @@ export async function toolExecute(raw: unknown) {
   return r;
 }
 export async function toolParallel(raw: unknown) {
-  const { projectId, calls } = z.object({ projectId: v.id, calls: z.array(call).min(1).max(20) }).parse(raw);
+  const { projectId, calls } = z.object({ projectId: v.id, calls: z.array(call).min(1).max(10) }).parse(raw);
   const { s } = await session(projectId);
-  const r = await s.parallel(calls);
+  // Same safe path as the agent: validated, conflict-checked, bounded, parent-linked.
+  const r = await s.execute("execute_parallel", { calls });
   await s.commit("Tool batch");
   return r;
 }
