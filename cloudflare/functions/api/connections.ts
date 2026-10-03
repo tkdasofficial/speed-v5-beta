@@ -7,11 +7,11 @@ const Target = z.union([z.object({ integration: z.literal("github") }), z.object
 
 type SafeConnection = { id: string; integration: string; account: string; status: "connected" | "reconnect_required"; scopes: string[]; connectedAt: string; lastUsedAt: string | null; metadata: unknown };
 
-async function base() {
+async function base(withUser = true) {
   const { requireUser, AuthError } = await import("@security/authorize.server");
   const store = await import("@security/connections.server");
   const reg = await import("../connect/providers");
-  return { me: await requireUser(), AuthError, store, reg };
+  return { me: withUser ? await requireUser() : (null as never), AuthError, store, reg };
 }
 
 async function githubConnection(userId: string): Promise<SafeConnection | null> {
@@ -36,8 +36,15 @@ export async function listIntegrations() {
 
 export async function integrationConnect(raw: unknown) {
   const { integration, origin } = z.object({ integration: IntegrationId, origin: z.string().url() }).parse(raw);
-  const { me, AuthError, reg } = await base();
-  const { isAllowedOrigin, ctx } = await import("../context");
+  const { me } = await base();
+  const { ctx } = await import("../context");
+  return startIntegrationConnect(me.id, integration, origin, new URL(ctx().req.url).origin);
+}
+
+/** Starts an OAuth connection for `userId` and returns the authorize URL the user must open (shared by the RPC and the agent tool). */
+export async function startIntegrationConnect(userId: string, integration: z.infer<typeof IntegrationId>, origin: string, callbackOrigin: string) {
+  const { AuthError, reg } = await base(false);
+  const { isAllowedOrigin } = await import("../context");
   const { randomId } = await import("@security/session.server");
   const { d1 } = await import("../d1");
   const p = reg.INTEGRATIONS[integration]!;
@@ -49,9 +56,10 @@ export async function integrationConnect(raw: unknown) {
   const t = Math.floor(Date.now() / 1000);
   await d1("DELETE FROM oauth_states WHERE expires_at < ?", [t]);
   await d1("INSERT INTO oauth_states (state, user_id, integration, origin, verifier, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
-    [state, me.id, integration, origin.replace(/\/$/, ""), verifier, t + 600]);
-  return { url: p.authorize(cfg, `${new URL(ctx().req.url).origin}${p.callbackPath}`, state, challenge) };
+    [state, userId, integration, origin.replace(/\/$/, ""), verifier, t + 600]);
+  return { url: p.authorize(cfg, `${callbackOrigin}${p.callbackPath}`, state, challenge), expiresInSeconds: 600 };
 }
+export const INTEGRATION_IDS = IntegrationId.options;
 
 export async function integrationTest(raw: unknown) {
   const target = Target.parse(raw);
@@ -77,25 +85,34 @@ export async function integrationTest(raw: unknown) {
 
 export async function integrationDisconnect(raw: unknown) {
   const target = Target.parse(raw);
-  const { me, AuthError, store } = await base();
+  const { me } = await base();
+  return disconnectIntegrationFor(me.id, target);
+}
+
+/** Revokes and removes one of `userId`'s connections (shared by the RPC and the agent tool). */
+export async function disconnectIntegrationFor(userId: string, target: z.infer<typeof Target>) {
+  const { AuthError, store } = await base(false);
   if ("integration" in target) {
     const { d1 } = await import("../d1");
     const { getGithubAccessToken } = await import("@security/github.server");
     const { providerConfig } = await import("../connect/providers");
     const cfg = providerConfig("github");
+    const [had] = await d1<{ user_id: string }>("SELECT user_id FROM github_connections WHERE user_id = ?", [userId]);
+    if (!had) throw new AuthError(404, "GitHub is not connected");
     try {
-      const token = await getGithubAccessToken(me.id);
+      const token = await getGithubAccessToken(userId);
       if (cfg) await fetch(`https://api.github.com/applications/${cfg.id}/grant`, {
         method: "DELETE",
         headers: { Authorization: `Basic ${btoa(`${cfg.id}:${cfg.secret}`)}`, Accept: "application/vnd.github+json", "User-Agent": "speed-agent", "Content-Type": "application/json" },
         body: JSON.stringify({ access_token: token }),
       });
     } catch { /* already invalid — local removal still proceeds */ }
-    await d1("DELETE FROM github_connections WHERE user_id = ?", [me.id]);
-    return { ok: true };
+    await d1("DELETE FROM github_connections WHERE user_id = ?", [userId]);
+    return { ok: true, removed: "github" };
   }
-  const r = await store.ownedConnection(me.id, target.connectionId);
+  const r = await store.ownedConnection(userId, target.connectionId);
   if (!r) throw new AuthError(404, "Connection not found");
   await store.removeConnection(r);
-  return { ok: true };
+  return { ok: true, removed: r.integration };
 }
+export const DisconnectTarget = Target;
