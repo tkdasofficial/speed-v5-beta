@@ -89,7 +89,7 @@ export const execTools = [
   }),
   defineTool({
     name: "run_dev_server", category: "execution", requiredPermissions: ["build:run"], capabilities: ["dev server", "npm run dev", "vite dev", "start server"], timeoutMs: 115_000, readOnly: false, idempotent: false, supportsParallelExecution: false,
-    description: "Start the project's development server (npm run dev, Vite, or a static file server for plain HTML) as a tracked process in the isolated runtime. Waits for it to answer HTTP, returns the process jobId, startup logs and state. It runs at most 12 minutes; it is not the preview (use run_production_build + open_preview for that). Stop it with cancel via the jobId.",
+    description: "Start the project's development server (npm run dev, Vite, or a static file server for plain HTML) as a tracked process in the isolated runtime. Waits for it to answer HTTP, returns the process jobId, startup logs and state. It runs at most 12 minutes; it is not the preview (use run_production_build + open_preview for that). Stop it early with cancel_operation{jobId}.",
     purpose: "Check that the dev server starts and capture its startup logs.",
     inputSchema: z.object({ startupTimeoutSeconds: z.number().int().min(15).max(180).default(90), waitSeconds: z.number().int().min(0).max(105).default(100) }),
     handler: async (a, env) => {

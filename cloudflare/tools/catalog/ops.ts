@@ -308,9 +308,10 @@ export const orchestrationTools = [
     },
   }),
   oc({
-    name: "cancel_operation", description: "Request cancellation of a running operation.", readOnly: false,
-    inputSchema: z.object({ operationId: OP }),
+    name: "cancel_operation", description: "Request cancellation of a running operation, or stop a runtime job / dev server by jobId.", readOnly: false,
+    inputSchema: z.object({ operationId: OP.optional(), jobId: z.string().regex(/^job_\w+$/).optional() }).refine((x) => !!x.operationId !== !!x.jobId, "Give exactly one of operationId or jobId"),
     handler: async (a, env) => {
+      if (a.jobId) { const { requestStop } = await import("../../functions/build/jobs.server"); return { data: await requestStop(env.userId, env.projectId, a.jobId), stateChanges: [{ kind: "task", target: a.jobId, detail: "stop requested" }] }; }
       const { d1 } = await import("@backend/d1");
       const r = await d1("UPDATE tool_operations SET cancel_requested = 1 WHERE id = ? AND project_id = ? AND user_id = ? AND status = 'running' RETURNING id", [a.operationId, env.projectId, env.userId]);
       return { data: { requested: r.length > 0 } };
