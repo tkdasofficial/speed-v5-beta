@@ -119,7 +119,7 @@ export function parseRedditRss(xml: string, n: number): SearchResult[] {
     const title = /<title>([\s\S]*?)<\/title>/.exec(e)?.[1];
     const url = link && httpUrl(decode(link));
     if (!url || !title || !/reddit\.com\/r\//.test(url)) continue;
-    const sub = /<category term="([^"]+)"/.exec(e)?.[1];
+    const sub = /reddit\.com\/r\/([^/]+)/.exec(url)?.[1];
     const body = /<content[^>]*>([\s\S]*?)<\/content>/.exec(e)?.[1] ?? "";
     const text = decode(decode(body)).replace(/submitted by .*$/, "").trim();
     const updated = /<updated>([^<]+)<\/updated>/.exec(e)?.[1];
