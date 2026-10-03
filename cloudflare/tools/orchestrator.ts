@@ -35,8 +35,7 @@ export class ToolSession {
   private before: unknown = null;
   private base = 0;
   private dirty = new Set<string>();
-  private depth = 0;
-  private parent: string | null = null;
+  private readonly depths = new Map<string, number>();
   private readonly abort = new AbortController();
   constructor(readonly o: SessionOpts) { o.signal?.addEventListener("abort", () => this.abort.abort()); }
 
@@ -66,7 +65,8 @@ export class ToolSession {
       invalidate: () => { this.store = null; this.dirty.clear(); this.guard.stateChanged(); },
       settings: () => this.o.io.settings(this.o.projectId),
       patchSettings: async (p) => { await this.o.io.patchSettings(this.o.userId, this.o.projectId, p); this.guard.stateChanged(); },
-      run: (name, args) => this.execute(name, args),
+      // Children carry their parent explicitly, so concurrent children (execute_parallel) keep correct audit links.
+      run: (name, args) => this.execute(name, args, operationId),
       log: (m) => { this.logs.push(m); },
     };
   }
@@ -77,15 +77,16 @@ export class ToolSession {
     return findToolsByCapability(nameOrCapability, { limit: 1, readOnly: !!this.o.readOnly })[0]?.name ?? null;
   }
 
-  async execute(nameOrCapability: string, rawArgs: Record<string, unknown> = {}): Promise<ToolResult> {
+  async execute(nameOrCapability: string, rawArgs: Record<string, unknown> = {}, parentOp: string | null = null): Promise<ToolResult> {
     const name = this.resolve(nameOrCapability) ?? nameOrCapability;
     const id = opId();
     const t0 = Date.now();
     const tool = getTool(name);
     if (!tool) return normalizeError(id, name, new ToolFailure("UNKNOWN_TOOL", `No tool for "${nameOrCapability}". Use find_tools{capability} to discover tools.`, false, { suggestions: findToolsByCapability(nameOrCapability, { limit: 5 }).map((x) => x.name) }, "find_tools"), 0, 0);
-    if (this.depth >= LIMITS.maxDepth) return normalizeError(id, name, new ToolFailure("LOOP_DETECTED", "Nested orchestration too deep"), 0, 0);
+    const depth = parentOp ? (this.depths.get(parentOp) ?? 0) + 1 : 0;
+    if (depth >= LIMITS.maxDepth) return normalizeError(id, name, new ToolFailure("LOOP_DETECTED", "Nested orchestration too deep"), 0, 0);
     let attempts = 0;
-    const parentId = this.parent;
+    const parentId = parentOp;
     let started = false;
     try {
       this.guard.check(name, rawArgs);
@@ -96,7 +97,7 @@ export class ToolSession {
       await checkPrerequisites(tool, env);
       await this.o.ops.start({ id, parentId, userId: this.o.userId, projectId: this.o.projectId, taskId: this.o.taskId ?? null, toolName: name, args: rest, revisionBefore: this.store ? this.base : null });
       started = true;
-      this.depth++; this.parent = id;
+      this.depths.set(id, depth);
       try {
         for (;;) {
           attempts++;
@@ -114,7 +115,7 @@ export class ToolSession {
             await sleep(tool.retryPolicy.backoffMs * attempts);
           }
         }
-      } finally { this.depth--; this.parent = parentId; }
+      } finally { this.depths.delete(id); }
     } catch (e) {
       const r = normalizeError(id, name, e, Date.now() - t0, attempts);
       if (r.error && this.guard.recordError(name, r.error.code, r.error.message)) {

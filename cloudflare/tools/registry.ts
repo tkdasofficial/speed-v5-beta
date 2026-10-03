@@ -4,7 +4,7 @@ import type { Category, ToolDefinition } from "./types";
 
 const tools = new Map<string, ToolDefinition>();
 
-type Def<S extends z.ZodTypeAny> = Omit<ToolDefinition<S>, "requiredPermissions" | "projectScoped" | "readOnly" | "destructive" | "requiresConfirmation" | "prerequisites" | "timeoutMs" | "retryPolicy" | "supportsParallelExecution" | "idempotent" | "purpose" | "capabilities"> &
+type Def<S extends z.ZodTypeAny> = Omit<ToolDefinition<S>, "requiredPermissions" | "projectScoped" | "readOnly" | "destructive" | "requiresConfirmation" | "prerequisites" | "timeoutMs" | "retryPolicy" | "supportsParallelExecution" | "idempotent" | "purpose" | "capabilities" | "requiresConfirmationFor"> &
   Partial<Pick<ToolDefinition<S>, "requiredPermissions" | "projectScoped" | "readOnly" | "destructive" | "requiresConfirmation" | "prerequisites" | "timeoutMs" | "retryPolicy" | "supportsParallelExecution" | "idempotent" | "purpose" | "capabilities">>;
 
 /** Tool factory with shared defaults (category, permissions…) that keeps per-tool argument typing. */

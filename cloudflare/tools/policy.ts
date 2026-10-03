@@ -26,7 +26,8 @@ export function checkPolicy(p: PolicyInput) {
     const v = args[k];
     if (v !== undefined && v !== p.projectId) throw new ToolFailure("SECURITY_BLOCKED", "Tools can only operate on the current project");
   }
-  if (tool.destructive && tool.requiresConfirmation && !p.confirmed && args["confirm"] !== true) {
+  const needsConfirm = (tool.destructive && tool.requiresConfirmation) || !!tool.requiresConfirmationFor?.(args);
+  if (needsConfirm && !p.confirmed && args["confirm"] !== true) {
     throw new ToolFailure("CONFIRMATION_REQUIRED", `${tool.name} is destructive — repeat the call with "confirm": true once the user agreed`, false, undefined, tool.name);
   }
 }

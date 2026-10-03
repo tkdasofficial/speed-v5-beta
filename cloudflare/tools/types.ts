@@ -81,6 +81,8 @@ export interface ToolDefinition<S extends z.ZodTypeAny = z.ZodTypeAny> {
   readOnly: boolean;
   destructive: boolean;
   requiresConfirmation: boolean;
+  /** Argument-dependent confirmation (e.g. a tool whose "apply" mode is destructive but whose "plan" mode is not). */
+  requiresConfirmationFor?: (args: Record<string, unknown>) => boolean;
   /** Names of prerequisite checks (see prerequisites.ts). */
   prerequisites: string[];
   timeoutMs: number;
