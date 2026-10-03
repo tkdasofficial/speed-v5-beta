@@ -208,23 +208,64 @@ export const recoveryTools = [
     },
   }),
   rc({
-    name: "recover_project", description: "Restore the newest revision that passes project validation, searching back up to 20 revisions.", destructive: true, requiredPermissions: ["project:write"], timeoutMs: 60_000, capabilities: ["project broken", "recover"],
-    inputSchema: z.object({}),
-    handler: async (_a, env) => {
-      if (!validateProject(await env.files()).errors.length) return { data: { recovered: false, reason: "Current version already validates" } };
-      await env.commit("Before recovery");
-      const { listRevisions, rollbackTo } = await import("../../sandbox/fs.server");
-      const revs = (await listRevisions(env.projectId, 21)).map((r) => r.revision);
-      const cur = revs[0] ?? 0;
-      // rollbackTo always reconstructs the exact state at `target` (it reverts every later revision, including earlier probes).
-      for (const target of revs.slice(1)) {
-        const r = await rollbackTo(env.projectId, target, { taskId: env.taskId });
-        env.invalidate();
-        if (!validateProject(await env.files()).errors.length) return { data: { recovered: true, restoredRevision: target, newRevision: r.revision }, stateChanges: [{ kind: "revision", target: String(target), detail: "recovered" }] };
+    name: "recover_project", readOnly: false, destructive: true, requiresConfirmation: false, requiredPermissions: ["project:write"], timeoutMs: 90_000, supportsParallelExecution: false, idempotent: false,
+    requiresConfirmationFor: (a) => a["mode"] === "apply",
+    description: "Safe, auditable recovery. mode \"plan\" (default) inspects files, build, jobs, snapshots and history and returns the chosen action without changing anything. mode \"apply\" (needs confirm) performs only that action: rebuild, or restore the newest valid snapshot/revision after saving a safety snapshot of the current work. Ambiguous cases return recovery_requires_review.",
+    purpose: "Get a broken project back to a working state without silently losing work.",
+    capabilities: ["project broken", "recover", "restore working version"],
+    inputSchema: z.object({ mode: z.enum(["plan", "apply"]).default("plan"), maxRevisions: z.number().int().min(1).max(30).default(15) }),
+    handler: async (a, env) => {
+      const { decideRecovery } = await import("../recovery");
+      const fs = await import("../../sandbox/fs.server");
+      const { d1 } = await import("@backend/d1");
+      const cur = await env.files();
+      const errors = validateProject(cur).errors.map((e) => ({ file: e.file, message: e.message }));
+      const revision = await env.revision();
+      const st = await env.settings();
+      const buildStatus = st["buildStatus"] ? String(st["buildStatus"]) : null;
+      const buildStuck = (buildStatus === "queued" || buildStatus === "building") && Number(st["buildExpires"] ?? 0) < Date.now();
+      const running = (await d1<{ id: string }>("SELECT id FROM runtime_jobs WHERE project_id = ? AND user_id = ? AND kind != 'dev' AND status IN ('queued','running') AND expires_at > ?", [env.projectId, env.userId, Date.now()])).map((r) => r.id);
+      const failedOps = await d1<{ id: string; tool_name: string; error_code: string | null }>("SELECT id, tool_name, error_code FROM tool_operations WHERE project_id = ? AND user_id = ? AND status = 'failed' ORDER BY created_at DESC LIMIT 5", [env.projectId, env.userId]);
+      const candidates: Parameters<typeof decideRecovery>[0]["candidates"] = [];
+      if (errors.length) {
+        const snaps = await d1<{ id: string; revision: number; label: string }>("SELECT id, revision, label FROM tool_snapshots WHERE project_id = ? AND user_id = ? AND revision < ? ORDER BY revision DESC LIMIT 5", [env.projectId, env.userId, revision]);
+        const revs = (await fs.listRevisions(env.projectId, a.maxRevisions + 1)).map((r) => r.revision).filter((r) => r < revision);
+        const seen = new Set<number>();
+        // Read-only probing: every candidate is reconstructed in memory; nothing is written while deciding.
+        for (const c of [...snaps.map((x) => ({ kind: "snapshot" as const, id: x.id, revision: x.revision, label: x.label })), ...revs.map((r) => ({ kind: "revision" as const, id: null, revision: r, label: null }))]) {
+          if (seen.has(c.revision) || env.signal.aborted) continue;
+          seen.add(c.revision);
+          const at = await fs.storeAt(env.projectId, c.revision);
+          candidates.push({ ...c, valid: !validateProject(at.store).errors.length, filesLost: at.changedSince ?? [] });
+          if (candidates.some((x) => x.valid)) break;
+        }
       }
-      await rollbackTo(env.projectId, cur, { taskId: env.taskId }).catch(() => undefined);
-      env.invalidate();
-      throw new ToolFailure("UNKNOWN_ERROR", `No valid revision found in the last ${revs.length} (current ${cur})`, false, undefined, "diagnose_failure");
+      const evidence = { revision, currentErrors: errors.slice(0, 20), buildStatus, buildError: st["buildError"] ? redact(String(st["buildError"])).slice(0, 1000) : null, buildStuck, runningJobs: running, candidates };
+      const action = decideRecovery({ ...evidence, currentErrors: errors });
+      const base = { mode: a.mode, action, evidence: { ...evidence, failedOperations: failedOps, candidates: candidates.map((c) => ({ ...c, filesLost: c.filesLost.slice(0, 30) })) } };
+      env.log(`recover_project ${a.mode}: ${action.type} — ${action.reason}`);
+      if (action.type === "review") return { data: { ...base, status: "recovery_requires_review" }, warnings: [action.reason], next: "diagnose_failure" };
+      if (action.type === "none") return { data: { ...base, status: "no_recovery_needed" } };
+      if (a.mode === "plan") return { data: { ...base, status: "plan_ready" }, next: "recover_project" };
+      // apply — exactly the chosen action, each step a normal audited child operation.
+      if (action.type === "rebuild") {
+        const r = await env.run("run_production_build", {});
+        if (!r.success) throw new ToolFailure(r.error!.code, `Recovery rebuild failed: ${r.error!.message}`, false, { ...base, childOperation: r.operationId });
+        return { data: { ...base, status: "recovered", steps: [{ tool: "run_production_build", operationId: r.operationId }] }, stateChanges: r.stateChanges };
+      }
+      const safety = await env.run("create_snapshot", { label: `Before recovery to r${action.revision}` });
+      if (!safety.success) throw new ToolFailure("PREREQUISITE_FAILED", `Could not save a safety snapshot, so nothing was restored: ${safety.error!.message}`, false, base);
+      const restore = await env.run("rollback_to_revision", { revision: action.revision, confirm: true });
+      if (!restore.success) throw new ToolFailure(restore.error!.code, `Restore failed (your work is saved in snapshot ${(safety.data as { id: string }).id}): ${restore.error!.message}`, false, base);
+      const after = validateProject(await env.files()).errors.length;
+      const safetyId = (safety.data as { id: string }).id;
+      return {
+        data: { ...base, status: after ? "recovered_with_errors" : "recovered", restoredRevision: action.revision, newRevision: (restore.data as { revision?: number })?.revision ?? null, remainingErrors: after, undo: { tool: "restore_snapshot", args: { id: safetyId } },
+          steps: [{ tool: "create_snapshot", operationId: safety.operationId }, { tool: "rollback_to_revision", operationId: restore.operationId }] },
+        stateChanges: [...safety.stateChanges, ...restore.stateChanges],
+        ...(after ? { warnings: [`${after} validation errors remain after restoring.`] } : {}),
+        next: "verify_project",
+      };
     },
   }),
 ];
@@ -271,9 +312,39 @@ const oc = group({ category: "orchestration", requiredPermissions: ["orchestrate
 const CALL = z.object({ tool: z.string().min(2).max(60), args: z.record(z.string(), z.unknown()).default({}) });
 export const orchestrationTools = [
   oc({
-    name: "execute_parallel", description: "Run independent read-only tools in parallel (write tools are run in order automatically).", readOnly: true, timeoutMs: 120_000,
-    inputSchema: z.object({ calls: z.array(CALL).min(1).max(10) }),
-    handler: async (a, env) => { const out = await Promise.all(a.calls.map((c) => env.run(c.tool, c.args))); return { data: { results: out.map((r) => ({ tool: r.toolName, operationId: r.operationId, success: r.success, data: r.data, error: r.error })) } }; },
+    name: "execute_parallel", readOnly: true, timeoutMs: 120_000, supportsParallelExecution: false, idempotent: false,
+    description: "Run up to 10 independent, parallel-safe tool calls concurrently (bounded). Every call is validated (known tool, arguments, permissions, project scope) before anything starts; non-parallel-safe tools, nested orchestration, duplicates and conflicting writes to the same resource are rejected. Each child runs through the normal executor with its own operation id. Fails if any required child fails.",
+    purpose: "Speed up independent reads/checks without bypassing the tool system.",
+    capabilities: ["parallel", "concurrent", "batch"],
+    inputSchema: z.object({ calls: z.array(CALL.extend({ required: z.boolean().default(true) })).min(1).max(10), maxConcurrency: z.number().int().min(1).max(4).default(3) }),
+    handler: async (a, env) => {
+      const { planParallel } = await import("../parallel");
+      const plan = planParallel(a.calls, { projectId: env.projectId, readOnly: env.readOnly, confirmed: env.confirmed });
+      if (plan.rejected.length) throw new ToolFailure(plan.rejected.some((r) => r.code === "CONFLICT") ? "CONFLICT" : plan.rejected.some((r) => r.code === "PERMISSION_DENIED") ? "PERMISSION_DENIED" : "INVALID_ARGUMENT",
+        `execute_parallel rejected ${plan.rejected.length} call(s); nothing was run: ${plan.rejected.map((r) => `#${r.index} ${r.tool}: ${r.reason}`).join("; ")}`, false, { rejected: plan.rejected });
+      type Child = { index: number; tool: string; required: boolean; status: "succeeded" | "failed" | "cancelled"; operationId: string | null; data: unknown; error: unknown };
+      const results: Child[] = new Array(a.calls.length);
+      let next = 0, active = 0, peak = 0;
+      const worker = async () => {
+        while (next < a.calls.length) {
+          const i = next++;
+          const c = a.calls[i]!;
+          if (env.signal.aborted) { results[i] = { index: i, tool: c.tool, required: c.required, status: "cancelled", operationId: null, data: null, error: { code: "CANCELLED", message: "Parent operation cancelled before this call started" } }; continue; }
+          active++; peak = Math.max(peak, active);
+          try {
+            const r = await env.run(c.tool, c.args);
+            results[i] = { index: i, tool: r.toolName, required: c.required, status: r.success ? "succeeded" : r.error?.code === "CANCELLED" ? "cancelled" : "failed", operationId: r.operationId, data: r.data, error: r.error };
+          } finally { active--; }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(a.maxConcurrency, a.calls.length) }, worker));
+      const ok = results.filter((r) => r.status === "succeeded").length;
+      const status = ok === results.length ? "all_succeeded" : ok === 0 ? (results.every((r) => r.status === "cancelled") ? "cancelled" : "all_failed") : "partial_failure";
+      const failedRequired = results.filter((r) => r.required && r.status !== "succeeded");
+      const data = { status, parentOperationId: env.operationId, succeeded: ok, failed: results.length - ok, maxConcurrency: a.maxConcurrency, peakConcurrency: peak, results };
+      if (failedRequired.length) throw new ToolFailure(failedRequired.every((r) => r.status === "cancelled") ? "CANCELLED" : "COMMAND_FAILED", `${failedRequired.length} required call(s) failed: ${failedRequired.map((r) => `#${r.index} ${r.tool}`).join(", ")}`, false, data, "diagnose_failure");
+      return { data, ...(status !== "all_succeeded" ? { warnings: ["Some optional calls failed."] } : {}) };
+    },
   }),
   oc({
     name: "execute_sequence", description: "Run dependent tools in order, stopping at the first failure.", readOnly: false, timeoutMs: 120_000,
