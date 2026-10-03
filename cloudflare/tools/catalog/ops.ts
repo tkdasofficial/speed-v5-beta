@@ -1,6 +1,6 @@
 // Logs, security, cleanup, recovery, integrations and orchestration-control tools. All real reads/writes on
 // D1 audit tables, the project file store, or the user's own provider connections.
-import { defineTool } from "../registry";
+import { defineTool, group } from "../registry";
 import { z, ToolFailure, visible, remove, fetchJson, ASSET_EXT, TEXT_EXT, readPkg } from "./util";
 import { SECRET_PATTERNS, redact } from "../policy";
 import { validateProject, validateReferences } from "../../../sandbox/intelligence/validate";
@@ -17,7 +17,7 @@ async function op(env: ToolEnv, id: string) {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------- logs ----------------
-const lg = (d: Parameters<typeof defineTool>[0]) => defineTool({ category: "logs", requiredPermissions: ["logs:read"], ...d });
+const lg = group({ category: "logs", requiredPermissions: ["logs:read"] });
 export const logTools = [
   lg({
     name: "search_logs", description: "Search the operation log (tool name, error code or message).", capabilities: ["grep logs"],
@@ -66,7 +66,7 @@ export const logTools = [
 ];
 
 // ---------------- security ----------------
-const sec = (d: Parameters<typeof defineTool>[0]) => defineTool({ category: "security", ...d });
+const sec = group({ category: "security" });
 const RISKY: { name: string; re: RegExp; severity: "high" | "medium" | "low" }[] = [
   { name: "eval / new Function", re: /\beval\s*\(|new\s+Function\s*\(/g, severity: "high" },
   { name: "dangerouslySetInnerHTML", re: /dangerouslySetInnerHTML/g, severity: "medium" },
@@ -124,7 +124,7 @@ export const securityTools = [
 
 // ---------------- cleanup ----------------
 const JUNK = /(^|\/)(\.DS_Store|Thumbs\.db|desktop\.ini|npm-debug\.log.*|yarn-error\.log|.*\.tmp|.*\.bak|.*~)$/i;
-const cl = (d: Parameters<typeof defineTool>[0]) => defineTool({ category: "cleanup", ...d });
+const cl = group({ category: "cleanup" });
 export const cleanupTools = [
   cl({
     name: "cleanup_workspace", description: "Remove junk files (.DS_Store, *.tmp, *.bak, debug logs) and empty folders.", readOnly: false, capabilities: ["clean up", "remove temp files"],
@@ -160,7 +160,7 @@ export const cleanupTools = [
 ];
 
 // ---------------- recovery ----------------
-const rc = (d: Parameters<typeof defineTool>[0]) => defineTool({ category: "recovery", ...d });
+const rc = group({ category: "recovery" });
 export const recoveryTools = [
   rc({
     name: "analyze_build_failure", description: "Explain the latest failed build: error text, likely file/line and matching project errors.", capabilities: ["why did build fail"],
@@ -230,7 +230,7 @@ export const recoveryTools = [
 ];
 
 // ---------------- integrations ----------------
-const ig = (d: Parameters<typeof defineTool>[0]) => defineTool({ category: "integrations", requiredPermissions: ["integration:read"], projectScoped: false, ...d });
+const ig = group({ category: "integrations", requiredPermissions: ["integration:read"], projectScoped: false });
 export const integrationTools = [
   ig({
     name: "list_integrations", description: "Connected accounts (GitHub, Google, Supabase…) and their status; never returns tokens.", capabilities: ["connections", "connected services"],
@@ -267,7 +267,7 @@ export const integrationTools = [
 ];
 
 // ---------------- orchestration control ----------------
-const oc = (d: Parameters<typeof defineTool>[0]) => defineTool({ category: "orchestration", requiredPermissions: ["orchestrate"], ...d });
+const oc = group({ category: "orchestration", requiredPermissions: ["orchestrate"] });
 const CALL = z.object({ tool: z.string().min(2).max(60), args: z.record(z.string(), z.unknown()).default({}) });
 export const orchestrationTools = [
   oc({

@@ -1,12 +1,12 @@
 // Code transformation and asset tools: atomic multi-edit patches, multi-file replace, formatting, templates,
 // and binary asset management in the project file store.
-import { defineTool } from "../registry";
+import { defineTool, group } from "../registry";
 import { z, ToolFailure, P, getFile, write, remove, safeToolPath, fetchJson, ASSET_EXT, TEXT_EXT, detect, visible } from "./util";
 import { validateFile } from "../../../sandbox/intelligence/validate";
 import type { MemoryFileStore } from "../../../sandbox/workspace/workspace";
 
 const diag = (s: MemoryFileStore, p: string) => validateFile(s, p).filter((d) => d.severity === "error").slice(0, 10);
-const tf = (d: Parameters<typeof defineTool>[0]) => defineTool({ category: "transform", readOnly: false, ...d });
+const tf = group({ category: "transform", readOnly: false });
 
 /** Whitespace normalization that never changes meaning: LF endings, no trailing spaces, one final newline; JSON re-indented. */
 function basicFormat(path: string, text: string) {
@@ -126,7 +126,7 @@ function dims(b64: string): { width: number; height: number } | null {
   }
   return null;
 }
-const as = (d: Parameters<typeof defineTool>[0]) => defineTool({ category: "assets", ...d });
+const as = group({ category: "assets" });
 export const assetTools = [
   as({
     name: "list_assets", description: "Images, fonts, media and other binary assets in the project with sizes.", capabilities: ["images", "media files"],

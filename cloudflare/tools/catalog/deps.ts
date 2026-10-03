@@ -1,11 +1,11 @@
 // Dependency and environment/config tools. package.json edits use real npm registry data; env values are
 // AES-GCM encrypted at rest (project_env) and never returned to the model in plain text.
-import { defineTool } from "../registry";
+import { defineTool, group } from "../registry";
 import { z, ToolFailure, readPkg, writePkg, npmInfo, fetchJson, importedPackages, detect, write, safeToolPath, getFile, NPM } from "./util";
 import { envStr } from "@backend/context";
 
 const NAME = z.string().regex(/^(@[a-z0-9._-]+\/)?[a-z0-9._-]+$/i).max(214);
-const dep = (d: Parameters<typeof defineTool>[0]) => defineTool({ category: "dependencies", ...d });
+const dep = group({ category: "dependencies" });
 
 /** Highest published version satisfying a simple ^/~/exact range (enough for package.json maintenance). */
 function satisfies(v: string, range: string) {
@@ -130,7 +130,7 @@ export async function openEnv(projectId: string, sealed: string) {
   return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: u(iv!), additionalData: enc.encode(projectId) }, await key(), u(ct!)));
 }
 const mask = (v: string) => (v.length <= 4 ? "****" : `${v.slice(0, 2)}${"*".repeat(Math.min(12, v.length - 4))}${v.slice(-2)}`);
-const envTool = (d: Parameters<typeof defineTool>[0]) => defineTool({ category: "environment", requiredPermissions: ["env:read"], ...d });
+const envTool = group({ category: "environment", requiredPermissions: ["env:read"] });
 
 /** Env names referenced by source code (Vite import.meta.env.X and process.env.X). */
 function referencedEnv(s: Awaited<ReturnType<import("../types").ToolEnv["files"]>>) {
