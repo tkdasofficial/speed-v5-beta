@@ -140,9 +140,15 @@ export const planningTools = [
   }),
   plan({
     name: "get_task_progress", description: "Status of the current background task and recent tasks for this project.", requiredPermissions: ["project:read"], capabilities: ["task status"],
-    inputSchema: z.object({}),
-    handler: async (_a, env) => {
+    inputSchema: z.object({ taskId: z.string().regex(/^[\w-]{3,80}$/).optional() }),
+    handler: async (a, env) => {
       const { d1 } = await import("@backend/d1");
+      if (a.taskId) {
+        const [t] = await d1<{ id: string; type: string; status: string; progress: number | null; error: string | null; created_at: string; updated_at: string }>("SELECT id, type, status, progress, error, created_at, updated_at FROM tasks WHERE id = ? AND project_id = ? AND user_id = ?", [a.taskId, env.projectId, env.userId]);
+        if (!t) throw new ToolFailure("INVALID_ARGUMENT", "Task not found in this project");
+        const events = await d1("SELECT seq, kind, substr(data, 1, 300) AS data, created_at FROM task_events WHERE task_id = ? ORDER BY seq DESC LIMIT 10", [t.id]);
+        return { data: { task: t, recentEvents: events } };
+      }
       const rows = await d1<{ id: string; type: string; status: string; progress: number | null; created_at: string }>("SELECT id, type, status, progress, created_at FROM tasks WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 10", [env.projectId, env.userId]);
       return { data: { current: rows.find((r) => r.id === env.taskId) ?? null, recent: rows } };
     },

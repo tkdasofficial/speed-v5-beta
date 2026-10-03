@@ -46,15 +46,38 @@ export const depTools = [
   }),
   dep({
     name: "remove_dependency", description: "Remove a package from package.json (warns if still imported).", readOnly: false, capabilities: ["npm uninstall"],
-    inputSchema: z.object({ name: NAME }),
+    inputSchema: z.object({ name: NAME.optional(), names: z.array(NAME).min(1).max(50).optional() }).refine((a) => !!a.name !== !!a.names, "Pass name or names"),
     handler: async (a, env) => {
       const s = await env.files(); const pkg = readPkg(s)!;
-      const had = !!(pkg.dependencies?.[a.name] || pkg.devDependencies?.[a.name]);
-      if (!had) throw new ToolFailure("DEPENDENCY_FAILED", `${a.name} is not in package.json`);
-      delete pkg.dependencies?.[a.name]; delete pkg.devDependencies?.[a.name];
+      const list = [...new Set(a.names ?? [a.name!])];
+      const missing = list.filter((n) => !(pkg.dependencies?.[n] || pkg.devDependencies?.[n]));
+      if (missing.length) throw new ToolFailure("DEPENDENCY_FAILED", `${missing.join(", ")} ${missing.length > 1 ? "are" : "is"} not in package.json`);
+      for (const n of list) { delete pkg.dependencies?.[n]; delete pkg.devDependencies?.[n]; }
       writePkg(env, s, pkg);
-      const still = importedPackages(s).get(a.name) ?? [];
-      return { data: { removed: a.name }, warnings: still.length ? [`Still imported by ${still.slice(0, 5).join(", ")}`] : [], stateChanges: [{ kind: "file", target: "package.json", detail: `removed ${a.name}` }] };
+      // Keep package-lock.json consistent: drop the root declarations and the top-level installed entries.
+      const lockChanged: string[] = [];
+      const lock = s.get("package-lock.json");
+      if (lock && lock.encoding === "utf8") {
+        try {
+          const j = JSON.parse(lock.content) as { packages?: Record<string, { dependencies?: Record<string, string>; devDependencies?: Record<string, string> }>; dependencies?: Record<string, unknown> };
+          for (const n of list) {
+            const root = j.packages?.[""];
+            if (root?.dependencies?.[n] || root?.devDependencies?.[n]) { delete root.dependencies?.[n]; delete root.devDependencies?.[n]; lockChanged.push(n); }
+            if (j.packages?.[`node_modules/${n}`]) { delete j.packages[`node_modules/${n}`]; if (!lockChanged.includes(n)) lockChanged.push(n); }
+            if (j.dependencies?.[n]) { delete j.dependencies[n]; if (!lockChanged.includes(n)) lockChanged.push(n); }
+          }
+          if (lockChanged.length) write(env, s, "package-lock.json", `${JSON.stringify(j, null, 2)}\n`);
+        } catch { /* unreadable lockfile: reported below */ }
+      }
+      const used = importedPackages(s);
+      const still = list.flatMap((n) => (used.get(n) ?? []).slice(0, 3).map((f) => `${n} still imported by ${f}`));
+      const warnings = [...still, ...(lock && !lockChanged.length ? ["package-lock.json was not updated (no matching entries or unreadable); run install_dependencies to regenerate it"] : []), ...(lockChanged.length ? ["Transitive lock entries are pruned on the next install_dependencies"] : [])];
+      return {
+        data: { removed: list, lockfileUpdated: lockChanged.length > 0 },
+        warnings,
+        stateChanges: [{ kind: "file", target: "package.json", detail: `removed ${list.join(", ")}` }, ...(lockChanged.length ? [{ kind: "file" as const, target: "package-lock.json", detail: "pruned" }] : [])],
+        next: "install_dependencies",
+      };
     },
   }),
   dep({
@@ -85,14 +108,25 @@ export const depTools = [
     name: "audit_dependencies", description: "Check declared package versions against the npm security advisory database.", requiredPermissions: ["project:read", "network:fetch"], timeoutMs: 30_000, capabilities: ["npm audit", "vulnerabilities"],
     inputSchema: z.object({}),
     handler: async (_a, env) => {
-      const pkg = readPkg(await env.files())!;
+      const files = await env.files();
+      const pkg = readPkg(files)!;
       const all = Object.entries({ ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) });
+      const manifestIssues: { package: string; issue: string }[] = [];
+      for (const [n, r] of all) {
+        if (!/^(@[a-z0-9._-]+\/)?[a-z0-9._-]+$/i.test(n)) manifestIssues.push({ package: n, issue: "invalid package name" });
+        if (r === "*" || r === "latest" || r === "") manifestIssues.push({ package: n, issue: `unpinned version "${r}"` });
+        else if (!/^(workspace:|file:|link:|npm:|git|https?:)/.test(r) && !/^[\^~<>=v]*\d+(\.(\d+|x|\*))?(\.(\d+|x|\*))?([-+][\w.]+)?(\s*(\|\||-|\s)\s*[\^~<>=v]*\d[\w.+-]*)*$/.test(r.trim())) manifestIssues.push({ package: n, issue: `invalid version range "${r}"` });
+        else if (/^(git|https?:|file:)/.test(r)) manifestIssues.push({ package: n, issue: `remote/local source "${r}" (not verifiable on npm)` });
+      }
+      for (const n of Object.keys(pkg.dependencies ?? {})) if (pkg.devDependencies?.[n]) manifestIssues.push({ package: n, issue: "declared in both dependencies and devDependencies" });
+      const declared = new Set(all.map(([n]) => n));
+      const undeclared = [...importedPackages(files).keys()].filter((n) => !declared.has(n));
       const body: Record<string, string[]> = {};
       for (const [n, r] of all) body[n] = [r.replace(/^[^\d]*/, "")];
       const r = await fetchJson<Record<string, { title: string; severity: string; url: string; vulnerable_versions: string }[]>>(`${NPM}/-/npm/v1/security/advisories/bulk`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), timeoutMs: 25_000 }, env);
       if (r.status >= 400) throw new ToolFailure("INTEGRATION_FAILED", `npm advisory API returned ${r.status}`, true);
       const found = Object.entries(r.body ?? {}).flatMap(([n, l]) => l.map((x) => ({ package: n, severity: x.severity, title: x.title, vulnerable: x.vulnerable_versions, url: x.url })));
-      return { data: { vulnerabilities: found, packages: all.length } };
+      return { data: { vulnerabilities: found, packages: all.length, manifestIssues, undeclared, valid: !found.length && !manifestIssues.length && !undeclared.length }, ...(undeclared.length ? { next: "fix_missing_dependencies" } : {}) };
     },
   }),
   dep({

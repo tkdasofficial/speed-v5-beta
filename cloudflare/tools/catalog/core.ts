@@ -97,11 +97,13 @@ export const coreTools = [
   }),
   defineTool({
     name: "get_operation_logs", category: "logs", description: "Recent tool operations (audit log) for this project.", requiredPermissions: ["logs:read"],
-    inputSchema: z.object({ limit: z.number().int().min(1).max(100).default(30), failedOnly: z.boolean().default(false) }),
+    inputSchema: z.object({ limit: z.number().int().min(1).max(100).default(30), failedOnly: z.boolean().default(false), includeResults: z.boolean().default(false), tool: z.string().regex(/^[a-z][a-z0-9_]{1,59}$/).optional() }),
     handler: async (a, env) => {
       const { d1 } = await import("@backend/d1");
-      const rows = await d1(`SELECT id, parent_id, tool_name, status, error_code, error_message, attempts, duration_ms, created_at FROM tool_operations WHERE project_id = ? AND user_id = ? ${a.failedOnly ? "AND status = 'failed'" : ""} ORDER BY created_at DESC LIMIT ?`, [env.projectId, env.userId, a.limit]);
-      return { data: { operations: rows } };
+      const p: unknown[] = [env.projectId, env.userId]; if (a.tool) p.push(a.tool); p.push(a.limit);
+      const rows = await d1<Record<string, unknown> & { result?: string | null }>(`SELECT id, parent_id, tool_name, status, error_code, error_message, attempts, duration_ms, created_at${a.includeResults ? ", result" : ""} FROM tool_operations WHERE project_id = ? AND user_id = ? ${a.failedOnly ? "AND status = 'failed'" : ""} ${a.tool ? "AND tool_name = ?" : ""} ORDER BY created_at DESC LIMIT ?`, p);
+      const { redact } = await import("../policy");
+      return { data: { operations: a.includeResults ? rows.map((r) => ({ ...r, result: r.result ? (() => { try { return JSON.parse(redact(String(r.result)).slice(0, 4000)); } catch { return redact(String(r.result)).slice(0, 4000); } })() : null })) : rows } };
     },
   }),
   defineTool({
