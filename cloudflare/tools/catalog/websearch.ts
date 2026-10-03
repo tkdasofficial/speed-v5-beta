@@ -110,6 +110,24 @@ export function parseReddit(j: { data?: { children?: RedditPost[] } }, n: number
   }).slice(0, n);
 }
 
+/** Reddit's public Atom search feed (used when the JSON API refuses unauthenticated cloud traffic). */
+export function parseRedditRss(xml: string, n: number): SearchResult[] {
+  const out: SearchResult[] = [];
+  for (const e of xml.split("<entry>").slice(1)) {
+    if (out.length >= n) break;
+    const link = /<link href="([^"]+)"/.exec(e)?.[1];
+    const title = /<title>([\s\S]*?)<\/title>/.exec(e)?.[1];
+    const url = link && httpUrl(decode(link));
+    if (!url || !title || !/reddit\.com\/r\//.test(url)) continue;
+    const sub = /<category term="([^"]+)"/.exec(e)?.[1];
+    const body = /<content[^>]*>([\s\S]*?)<\/content>/.exec(e)?.[1] ?? "";
+    const text = decode(decode(body)).replace(/submitted by .*$/, "").trim();
+    const updated = /<updated>([^<]+)<\/updated>/.exec(e)?.[1];
+    out.push({ title: decode(title), url, snippet: clip(`r/${sub ?? "reddit"}${text ? ` — ${text}` : ""}`), domain: "reddit.com", source: "reddit", ...(updated ? { publishedAt: updated } : {}) });
+  }
+  return out;
+}
+
 // ---------- transport ----------
 
 async function get(url: string, init: RequestInit, signal: AbortSignal, name: string) {
@@ -190,6 +208,10 @@ export function providers(): SearchProvider[] {
         const r = await get(`${base}${path}?q=${encodeURIComponent(q)}&limit=${Math.min(n, 10)}&sort=relevance&type=link&raw_json=1`, { headers: { Accept: "application/json" } }, AbortSignal.any([signal, AbortSignal.timeout(4000)]), "Reddit")
           .catch((e) => { if (signal.aborted) throw e; throw new ToolFailure("INTEGRATION_FAILED", (e as Error).message, true); });
         return parseReddit(await json(r, "Reddit"), n);
+      }).concat(async () => {
+        const r = await get(`https://www.reddit.com/search.rss?q=${encodeURIComponent(q)}&limit=${Math.min(n, 10)}&sort=relevance&type=link`, { headers: { Accept: "application/atom+xml" } }, AbortSignal.any([signal, AbortSignal.timeout(4000)]), "Reddit RSS")
+          .catch((e) => { if (signal.aborted) throw e; throw new ToolFailure("INTEGRATION_FAILED", (e as Error).message, true); });
+        return parseRedditRss(await r.text(), n);
       }), "Reddit"),
     },
   ];
