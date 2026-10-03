@@ -1,6 +1,7 @@
 // Git / version control tools: real GitHub Git Data API calls on the repository linked to this project,
 // using the owner's own GitHub connection. The working copy is the project's revisioned file store.
 import { defineTool, group } from "../registry";
+import { safeToolPath } from "../policy";
 import { z, ToolFailure, gh, linkedRepo, blobSha, unifiedDiff, visible, write, remove, ASSET_EXT } from "./util";
 import type { ToolEnv } from "../types";
 
@@ -151,13 +152,28 @@ export const gitTools = [
     },
   }),
   git({
-    name: "git_revert_file", description: "Restore one file to its content on the linked branch.", readOnly: false, requiredPermissions: ["git:read", "project:write"], capabilities: ["discard changes", "git checkout file"],
-    inputSchema: z.object({ path: z.string().min(1).max(400), branch: z.string().max(100).optional() }),
+    name: "git_revert_file", description: "Restore one file to its content on the linked branch, or revert a whole commit (commit=sha): every file it changed goes back to its parent's version (files it added are removed). Changes land in the project; commit them with git_commit_and_push.", readOnly: false, requiredPermissions: ["git:read", "project:write"], capabilities: ["discard changes", "git checkout file", "git revert", "undo commit"],
+    inputSchema: z.object({ path: z.string().min(1).max(400).optional(), commit: z.string().regex(/^[0-9a-f]{7,40}$/).optional(), branch: z.string().max(100).optional() }).refine((a) => !!a.path !== !!a.commit, "Pass exactly one of path or commit"),
     handler: async (a, env) => {
       const { repo, branch } = await branchOf(env, a.branch);
       const s = await env.files();
-      write(env, s, a.path, await remoteText(env, repo.full_name, branch, a.path));
-      return { data: { path: a.path, branch }, stateChanges: [{ kind: "file", target: a.path, detail: "reverted from git" }] };
+      if (a.path) {
+        const p = safeToolPath(a.path);
+        write(env, s, p, await remoteText(env, repo.full_name, branch, p));
+        return { data: { path: p, branch }, stateChanges: [{ kind: "file", target: p, detail: "reverted from git" }] };
+      }
+      const c = await gh<{ sha: string; commit: { message: string }; parents: { sha: string }[]; files?: { filename: string; status: string; previous_filename?: string }[] }>(env, "GET", `/repos/${repo.full_name}/commits/${a.commit}`);
+      if (c.parents.length !== 1) throw new ToolFailure("INVALID_ARGUMENT", c.parents.length ? "Merge commits cannot be reverted file-by-file" : "The first commit has no parent to revert to");
+      const files = c.files ?? [];
+      if (files.length > 100) throw new ToolFailure("RESOURCE_LIMIT", `Commit changes ${files.length} files (max 100)`);
+      const parent = c.parents[0]!.sha; const changes: { kind: "file"; target: string; detail: string }[] = [];
+      for (const f of files) {
+        const p = safeToolPath(f.filename);
+        if (f.status === "added") { if (s.get(p)) { remove(env, s, p); changes.push({ kind: "file", target: p, detail: "removed (added by reverted commit)" }); } continue; }
+        if (f.status === "renamed" && f.previous_filename) { if (s.get(p)) remove(env, s, p); const old = safeToolPath(f.previous_filename); write(env, s, old, await remoteText(env, repo.full_name, parent, old)); changes.push({ kind: "file", target: old, detail: "rename reverted" }); continue; }
+        write(env, s, p, await remoteText(env, repo.full_name, parent, p)); changes.push({ kind: "file", target: p, detail: f.status === "removed" ? "restored" : "reverted" });
+      }
+      return { data: { commit: c.sha, message: c.commit.message.split("\n")[0], parent, files: changes.map((x) => ({ path: x.target, change: x.detail })) }, stateChanges: changes, next: "git_commit_and_push" };
     },
   }),
   git({
