@@ -1,16 +1,11 @@
-# Roadmap
-- [x] Auth pages redesign + scroll/gap fix
-- [x] Dashboard & projects redesign
-- [x] Workspace redesign (chat, composer, bottom bar)
-- [x] Workspace panels (preview, tools, tasks, project settings)
-- [x] Settings & info redesign (settings, account, FAQ, privacy, terms)
-- [x] Remove duplicate page labels and status tags; enlarge auth branding icon
-- [x] Split app-page styles into owner-specific files and compact auth spacing
+# Roadmap — Speed Agent internal tool system
 
-- [x] Upgrade desktop sidebar and mobile AppDrawer to match the app-wide UI quality
-- [x] Compact the AppDrawer, consolidate account options, simplify active navigation, and restore Preview text contrast
-- [x] Audit and fix button-label contrast across all pages and workspace panels
-- [x] Security, real-time and App Shell architecture (Stripe keys pending)
-- [x] Move whole backend to a standalone Cloudflare Worker reached via VITE_API_URL (host-independent frontend)
-- [x] Global background task system (tasks table, queue, worker, retries, cancel, live updates)
-- [x] Server-side sandbox: new "sandbox" D1, file tree + revisions, AI edits run as background tasks
+- [x] Live agent runs every action through the ToolOrchestrator (policy, validation, audit)
+- [x] Phase-limited tool exposure for the model
+- [x] Git, dependency, environment, state/snapshot, planning, knowledge, logs, security, cleanup, recovery, integration, orchestration, transform, asset tools (138 total)
+- [x] Real command runtime (install/build/typecheck/lint/test/format/script) on GitHub Actions, verified end to end
+- [x] Missing database updates (tool operations, plans, command jobs) applied to production; deploy now applies them automatically
+- [ ] Browser-based preview checks (screenshots, console errors) — needs Cloudflare Browser Rendering enabled on the account
+- [ ] Database/API testing tools for user projects — waiting on how user projects should store data
+- [ ] Redeploy the live-updates worker — waiting on REALTIME_SECRET
+- [ ] Old AI fallback tests use a test helper the backend test runner lacks — rewrite them
