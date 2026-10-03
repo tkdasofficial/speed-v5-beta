@@ -41,8 +41,7 @@ export const execTools = [
     name: "run_script", category: "execution", description: "Run one package.json script (npm run <script>) in the isolated runtime.", requiredPermissions: ["project:execute"], timeoutMs: 20_000,
     inputSchema: z.object({ script: z.string().regex(/^[a-z0-9:_-]{1,60}$/i) }),
     handler: async (a, env) => {
-      const { loadStore } = await import("../../sandbox/fs.server");
-      const pkg = (await env.files()).get("package.json"); void loadStore;
+      const pkg = (await env.files()).get("package.json");
       const scripts = pkg ? ((JSON.parse(pkg.content) as { scripts?: Record<string, string> }).scripts ?? {}) : {};
       if (!scripts[a.script]) throw new ToolFailure("NOT_FOUND", `package.json has no "${a.script}" script (has: ${Object.keys(scripts).join(", ") || "none"})`);
       return start(env, "script", a.script);
