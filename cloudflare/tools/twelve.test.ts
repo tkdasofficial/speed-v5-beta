@@ -417,3 +417,96 @@ describe("registered platform tools", () => {
     for (const n of ["verify_build_output", "verify_upload", "upload_build", "connect_integration", "disconnect_integration", "create_task", "cancel_task"]) expect(logged.has(n) || ops.rows.length > 0).toBe(true);
   });
 });
+
+// ---------- canonical aliases (46 grouped tools) ----------
+import { CANONICAL_ALIASES } from "./aliases";
+import { allAliases } from "./registry";
+
+describe("canonical aliases", () => {
+  const names = Object.keys(CANONICAL_ALIASES);
+  it("covers exactly the 46 audited canonical names, each resolving to one real tool", () => {
+    expect(names.length).toBe(46);
+    expect(allAliases().length).toBe(46);
+    const real = new Set(allTools().map((t) => t.name));
+    for (const n of names) {
+      expect(real.has(n)).toBe(false); // alias, not a duplicate tool
+      const t = getTool(n)!;
+      expect(t).not.toBeNull();
+      expect(real.has(t.aliasOf!)).toBe(true);
+      expect(t.requiredPermissions).toEqual(getTool(t.aliasOf!)!.requiredPermissions);
+    }
+  });
+  it("is discoverable by its canonical name", () => {
+    expect(findToolsByCapability("clean_cache")[0]).toMatchObject({ name: "clean_cache", aliasOf: "cleanup_workspace" });
+  });
+  it("preset arguments are fixed and cannot be overridden", async () => {
+    const r = await sess().execute("mark_task_complete", { index: 0, status: "failed" });
+    expect(r.error?.code).toBe("INVALID_ARGUMENT");
+  });
+
+  const files = {
+    "package.json": JSON.stringify({ name: "x", dependencies: { react: "^18.3.1", lodash: "^4.17.21", left: "1.0.0" }, devDependencies: { vite: "^5.0.0" } }),
+    "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: { "": { dependencies: { react: "^18.3.1", lodash: "^4.17.21", left: "1.0.0" } }, "node_modules/lodash": { version: "4.17.21" }, "node_modules/left": { version: "1.0.0" }, "node_modules/react": { version: "18.3.1" } } }),
+    "src/App.tsx": `import { Routes, Route } from "react-router-dom";\nimport Home from "./pages/Home";\nexport default function App() { return (<Routes>\n        <Route path="/" element={<Home />} />\n      </Routes>); }\n`,
+    "src/pages/Home.tsx": "export default function Home() { return <h1>Home</h1>; }\n",
+    "dist/index.html": "<html></html>", "dist/assets/a.js": "x", ".vite/deps/x.js": "x", "node_modules/foo/index.js": "x", "notes.tmp": "x", "tsconfig.tsbuildinfo": "{}",
+    ".env": "SECRET=1", ".env.example": "SECRET=", "certs/server.pem": "-----", "logo.svg": `<?xml version="1.0"?><!-- c --><svg viewBox="0 0 10 10">  <title>x</title>  <rect/></svg>`,
+  };
+  const s2 = () => sess({ io: io(files) });
+
+  it("uninstall_dependencies removes several packages and prunes package-lock.json", async () => {
+    const r = await s2().execute("uninstall_dependencies", { names: ["lodash", "left"] });
+    expect(r.success).toBe(true);
+    expect(r.data).toMatchObject({ removed: ["lodash", "left"], lockfileUpdated: true });
+    expect(r.stateChanges.map((c) => c.target)).toEqual(["package.json", "package-lock.json"]);
+  });
+  it("uninstall_dependencies refuses unknown packages", async () => {
+    expect((await s2().execute("uninstall_dependencies", { names: ["nope"] })).error?.code).toBe("DEPENDENCY_FAILED");
+  });
+  it("clean_* scopes remove only their own files", async () => {
+    const files_ = (r: { data: unknown }) => (r.data as { files: string[] }).files.sort();
+    expect(files_(await s2().execute("clean_build_artifacts", { dryRun: true }))).toEqual(["dist/assets/a.js", "dist/index.html"]);
+    expect(files_(await s2().execute("clean_cache", { dryRun: true }))).toEqual([".vite/deps/x.js", "tsconfig.tsbuildinfo"]);
+    expect(files_(await s2().execute("clean_dependencies", { dryRun: true }))).toEqual(["node_modules/foo/index.js"]);
+    expect(files_(await s2().execute("clean_temp_files", { dryRun: true }))).toEqual(["notes.tmp"]);
+  });
+  it("scan_sensitive_files flags sensitive file names, not templates", async () => {
+    const r = await s2().execute("scan_sensitive_files", {});
+    const f = (r.data as { sensitiveFiles: { file: string }[]; clean: boolean });
+    expect(f.sensitiveFiles.map((x) => x.file).sort()).toEqual([".env", "certs/server.pem"]);
+    expect(f.clean).toBe(false);
+  });
+  it("generate_route creates the page and registers a react-router route", async () => {
+    const r = await s2().execute("generate_route", { name: "about", title: "About" });
+    expect(r.success).toBe(true);
+    expect(r.data).toMatchObject({ route: "/about", router: "react-router", routeFile: "src/App.tsx" });
+    expect(r.stateChanges.map((c) => c.target)).toContain("src/App.tsx");
+  });
+  it("read_asset returns the content; optimize_assets optimizes every SVG", async () => {
+    const r = await s2().execute("read_asset", { path: "logo.svg" });
+    expect((r.data as { content: { data: string } }).content.data).toContain("<svg");
+    const o = await s2().execute("optimize_assets", {});
+    expect(o.success).toBe(true);
+    expect((o.data as { optimized: { path: string }[]; savedBytes: number }).optimized.map((x) => x.path)).toEqual(["logo.svg"]);
+    expect((o.data as { savedBytes: number }).savedBytes).toBeGreaterThan(0);
+  });
+  it("validate_dependencies reports manifest problems", async () => {
+    const orig = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({})) as unknown as typeof fetch;
+    try {
+      const r = await sess({ io: io({ "package.json": JSON.stringify({ dependencies: { a: "latest", b: "^1.0.0" }, devDependencies: { b: "^1.0.0" } }), "src/x.ts": "import z from 'zod';" }) }).execute("validate_dependencies", {});
+      const d = r.data as { manifestIssues: { package: string; issue: string }[]; undeclared: string[]; valid: boolean };
+      expect(d.manifestIssues.map((x) => x.package).sort()).toEqual(["a", "b"]);
+      expect(d.undeclared).toEqual(["zod"]);
+      expect(d.valid).toBe(false);
+    } finally { globalThis.fetch = orig; }
+  });
+  it("get_runtime_status without a jobId reports the latest dev server", async () => {
+    nextJob = { kind: "dev", status: "running", phase: "ready" };
+    await sess().execute("run_dev_server", { waitSeconds: 0 });
+    nextJob = {};
+    const r = await sess().execute("get_runtime_status", {});
+    expect(r.success).toBe(true);
+    expect((r.data as { devServer: { kind: string } | null }).devServer?.kind).toBe("dev");
+  });
+});
