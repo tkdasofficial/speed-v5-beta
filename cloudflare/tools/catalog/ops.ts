@@ -39,11 +39,13 @@ export const logTools = [
   }),
   lg({
     name: "get_build_logs", description: "Build status/error history and recent runtime command jobs with their output.", capabilities: ["build output", "build error"],
-    inputSchema: z.object({ limit: z.number().int().min(1).max(20).default(5) }),
+    inputSchema: z.object({ limit: z.number().int().min(1).max(20).default(5), includeRuntime: z.boolean().default(false), kind: z.enum(["install", "build", "typecheck", "lint", "test", "format", "script", "command", "dev"]).optional() }),
     handler: async (a, env) => {
       const { d1 } = await import("@backend/d1"); const s = await env.settings();
-      const jobs = await d1<{ id: string; kind: string; status: string; exit_code: number | null; output: string | null; created_at: string }>("SELECT id, kind, status, exit_code, output, created_at FROM runtime_jobs WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT ?", [env.projectId, env.userId, a.limit]);
-      return { data: { lastBuild: { status: s["buildStatus"] ?? null, error: s["buildError"] || null, updatedAt: s["buildUpdatedAt"] ?? null }, jobs: jobs.map((j) => ({ ...j, output: j.output ? redact(j.output).slice(-4000) : null })) } };
+      const kind = a.kind ?? (a.includeRuntime ? null : null);
+      const jobs = await d1<{ id: string; kind: string; status: string; exit_code: number | null; output: string | null; stdout: string | null; stderr: string | null; phase: string | null; created_at: string }>(`SELECT id, kind, status, exit_code, output, stdout, stderr, phase, created_at FROM runtime_jobs WHERE project_id = ? AND user_id = ? ${kind ? "AND kind = ?" : a.includeRuntime ? "AND kind IN ('dev','command')" : ""} ORDER BY created_at DESC LIMIT ?`, kind ? [env.projectId, env.userId, kind, a.limit] : [env.projectId, env.userId, a.limit]);
+      const clip = (x: string | null) => (x ? redact(x).slice(-4000) : null);
+      return { data: { lastBuild: { status: s["buildStatus"] ?? null, error: s["buildError"] || null, updatedAt: s["buildUpdatedAt"] ?? null }, jobs: jobs.map((j) => ({ ...j, output: clip(j.output), stdout: clip(j.stdout), stderr: clip(j.stderr) })) } };
     },
   }),
   lg({
@@ -76,6 +78,11 @@ const RISKY: { name: string; re: RegExp; severity: "high" | "medium" | "low" }[]
   { name: "target=_blank without rel=noopener", re: /target=["']_blank["'](?![^>]*rel=["'][^"']*noopener)/g, severity: "low" },
   { name: "secret in localStorage", re: /localStorage\.setItem\(\s*["'][^"']*(token|secret|password|key)/gi, severity: "medium" },
 ];
+const SENSITIVE_FILES: [RegExp, string][] = [
+  [/^\.env(\..+)?$/, "environment file (move values to env vars)"], [/\.(pem|key|p12|pfx|jks|keystore|ppk)$/, "private key / certificate store"],
+  [/^id_(rsa|dsa|ecdsa|ed25519)$/, "SSH private key"], [/^\.npmrc$|^\.pypirc$|^\.netrc$/, "registry/login credentials file"],
+  [/^(credentials|service[-_]?account|client_secret)[\w.-]*\.json$/, "cloud credentials file"], [/^\.htpasswd$/, "password file"], [/^\.git-credentials$/, "git credentials"],
+];
 const lineOf = (text: string, idx: number) => text.slice(0, idx).split("\n").length;
 export const securityTools = [
   sec({
@@ -83,11 +90,17 @@ export const securityTools = [
     inputSchema: z.object({}),
     handler: async (_a, env) => {
       const findings: { file: string; line: number; type: string }[] = [];
-      for (const f of visible(await env.files())) {
+      const all = await env.files();
+      const sensitiveFiles = all.list().flatMap((f) => {
+        const base = f.path.split("/").pop()!.toLowerCase();
+        const why = SENSITIVE_FILES.find(([re]) => re.test(base))?.[1];
+        return why && !/\.(example|sample|template)$/.test(base) ? [{ file: f.path, reason: why }] : [];
+      });
+      for (const f of visible(all)) {
         if (f.encoding !== "utf8" || !TEXT_EXT.test(f.path)) continue;
         for (const p of SECRET_PATTERNS) for (const m of f.content.matchAll(new RegExp(p.re.source, "g"))) { findings.push({ file: f.path, line: lineOf(f.content, m.index ?? 0), type: p.name }); if (findings.length > 100) break; }
       }
-      return { data: { findings, clean: !findings.length }, next: findings.length ? "set_env_var" : null };
+      return { data: { findings, sensitiveFiles, clean: !findings.length && !sensitiveFiles.length }, next: findings.length || sensitiveFiles.length ? "set_env_var" : null };
     },
   }),
   sec({
@@ -124,18 +137,25 @@ export const securityTools = [
 
 // ---------------- cleanup ----------------
 const JUNK = /(^|\/)(\.DS_Store|Thumbs\.db|desktop\.ini|npm-debug\.log.*|yarn-error\.log|.*\.tmp|.*\.bak|.*~)$/i;
+const CLEAN = {
+  temp: JUNK,
+  build: /^(dist|build|out|\.output|\.next|\.nuxt|\.svelte-kit|storybook-static)\//,
+  cache: /(^|\/)(\.cache|\.vite|\.parcel-cache|\.turbo|\.eslintcache|\.stylelintcache|node_modules\/\.cache)(\/|$)|\.tsbuildinfo$/,
+  dependencies: /^(node_modules|\.pnpm-store|\.yarn\/cache|bower_components)\//,
+} as const;
 const cl = group({ category: "cleanup" });
 export const cleanupTools = [
   cl({
-    name: "cleanup_workspace", description: "Remove junk files (.DS_Store, *.tmp, *.bak, debug logs) and empty folders.", readOnly: false, capabilities: ["clean up", "remove temp files"],
-    inputSchema: z.object({ dryRun: z.boolean().default(false) }),
+    name: "cleanup_workspace", description: "Remove unwanted files from the project by scope: temp (junk like .DS_Store, *.tmp, *.bak, debug logs), build (dist/, build/, .output/, out/), cache (.cache, .vite, .parcel-cache, *.tsbuildinfo, .eslintcache), dependencies (committed node_modules, .pnpm-store), or all; empty folders are removed too.", readOnly: false, capabilities: ["clean up", "remove temp files", "clean build", "clean cache", "remove node_modules"],
+    inputSchema: z.object({ dryRun: z.boolean().default(false), scope: z.enum(["temp", "build", "cache", "dependencies", "all"]).default("temp") }),
     handler: async (a, env) => {
       const s = await env.files();
-      const junk = s.list().filter((f) => JUNK.test(f.path)).map((f) => f.path);
+      const scopes = a.scope === "all" ? (["temp", "build", "cache", "dependencies"] as const) : [a.scope];
+      const junk = s.list().filter((f) => scopes.some((sc) => CLEAN[sc].test(f.path))).map((f) => f.path);
       const used = new Set(s.list().flatMap((f) => { const parts = f.path.split("/"); return parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join("/")); }));
       const empty = s.folders().filter((d) => !used.has(d) && !s.folders().some((o) => o.startsWith(`${d}/`)));
       if (!a.dryRun) { for (const p of junk) remove(env, s, p); for (const d of empty) { s.removeFolder(d); env.markDirty(d); } }
-      return { data: { files: junk, emptyFolders: empty, dryRun: a.dryRun }, stateChanges: a.dryRun ? [] : junk.map((p) => ({ kind: "file" as const, target: p, detail: "removed" })) };
+      return { data: { scope: a.scope, files: junk, emptyFolders: empty, dryRun: a.dryRun }, stateChanges: a.dryRun ? [] : junk.map((p) => ({ kind: "file" as const, target: p, detail: "removed" })) };
     },
   }),
   cl({
@@ -180,6 +200,13 @@ export const recoveryTools = [
     handler: async (a, env) => {
       const o = await op(env, a.operationId);
       if (o.status === "running") throw new ToolFailure("CONFLICT", "Operation is still running", false, undefined, "wait_for_operation");
+      if (o.status === "completed") throw new ToolFailure("CONFLICT", "Operation already succeeded; nothing to retry", false, undefined, "get_operation_status");
+      // Policy: errors that cannot change on a re-run are refused instead of retried.
+      const NEVER = ["SECURITY_BLOCKED", "PERMISSION_DENIED", "INVALID_ARGUMENT", "NOT_FOUND", "CONFIRMATION_REQUIRED", "PREREQUISITE_FAILED"];
+      if (o.error_code && NEVER.includes(o.error_code)) throw new ToolFailure("CONFLICT", `${o.tool_name} failed with ${o.error_code}; retrying with the same arguments cannot succeed`, false, { errorCode: o.error_code }, o.error_code === "CONFIRMATION_REQUIRED" ? "ask_user" : "diagnose_failure");
+      const { d1 } = await import("@backend/d1");
+      const [chain] = await d1<{ n: number }>("SELECT COUNT(*) AS n FROM tool_operations WHERE project_id = ? AND user_id = ? AND tool_name = ? AND args = ? AND status = 'failed' AND created_at > datetime('now', '-1 hour')", [env.projectId, env.userId, o.tool_name, o.args]);
+      if ((chain?.n ?? 0) >= 3) throw new ToolFailure("RESOURCE_LIMIT", `${o.tool_name} has already failed ${chain!.n} times with these arguments in the last hour`, false, undefined, "diagnose_failure");
       const r = await env.run(o.tool_name, JSON.parse(o.args) as Record<string, unknown>);
       if (!r.success) throw new ToolFailure(r.error!.code, r.error!.message, r.error!.retryable);
       return { data: { retriedFrom: o.id, operationId: r.operationId, result: r.data }, stateChanges: r.stateChanges };

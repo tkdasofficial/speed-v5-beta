@@ -135,12 +135,13 @@ export const assetTools = [
   }),
   as({
     name: "get_asset_info", description: "Type, size and pixel dimensions of an asset.",
-    inputSchema: z.object({ path: P }),
+    inputSchema: z.object({ path: P, includeContent: z.boolean().default(false) }),
     handler: async (a, env) => {
       const p = safeToolPath(a.path); const f = getFile(await env.files(), p); const ext = p.split(".").pop()!.toLowerCase();
+      const content = a.includeContent ? (bytesOf(f) > 256_000 ? null : f.encoding === "base64" ? { encoding: "base64", data: f.content } : { encoding: "utf8", data: f.content }) : undefined;
       const d = f.encoding === "base64" && /^(png|jpe?g|gif|webp)$/.test(ext) ? dims(f.content) : null;
       const svg = ext === "svg" ? /viewBox=["'][\d.\s-]+?\s([\d.]+)\s([\d.]+)["']/.exec(f.content) : null;
-      return { data: { path: p, type: MIME[ext] ?? "application/octet-stream", bytes: bytesOf(f), ...(d ? d : svg ? { width: Number(svg[1]), height: Number(svg[2]) } : {}) } };
+      return { data: { path: p, type: MIME[ext] ?? "application/octet-stream", bytes: bytesOf(f), ...(d ? d : svg ? { width: Number(svg[1]), height: Number(svg[2]) } : {}), ...(content !== undefined ? { content } : {}) }, ...(content === null ? { warnings: ["Asset is larger than 256 KB; content not returned"] } : {}) };
     },
   }),
   as({
@@ -180,8 +181,16 @@ export const assetTools = [
   }),
   as({
     name: "optimize_svg", description: "Minify an SVG asset (strip comments, metadata, editor attributes, whitespace).", readOnly: false, capabilities: ["optimize image", "compress svg"],
-    inputSchema: z.object({ path: z.string().regex(/\.svg$/i) }),
+    inputSchema: z.object({ path: z.string().regex(/\.svg$/i).optional() }),
     handler: async (a, env) => {
+      if (!a.path) {
+        const s = await env.files();
+        const svgs = s.list().filter((f) => /\.svg$/i.test(f.path) && f.encoding === "utf8").map((f) => f.path);
+        const raster = s.list().filter((f) => /\.(png|jpe?g|gif|webp|avif)$/i.test(f.path)).map((f) => f.path);
+        const results = []; let saved = 0;
+        for (const p of svgs) { const r = await env.run("optimize_svg", { path: p }); if (r.success) { const d = r.data as { before: number; after: number }; saved += d.before - d.after; results.push({ path: p, ...d }); } }
+        return { data: { optimized: results, savedBytes: saved, skippedRaster: raster }, warnings: raster.length ? [`${raster.length} raster image(s) skipped: raster recompression is not available in the Worker runtime`] : [], stateChanges: results.filter((r) => r.after < r.before).map((r) => ({ kind: "file" as const, target: r.path, detail: "optimized" })) };
+      }
       const p = safeToolPath(a.path); const s = await env.files(); const f = getFile(s, p);
       const out = f.content.replace(/<\?xml[^>]*>|<!--[\s\S]*?-->|<metadata[\s\S]*?<\/metadata>|<title>[\s\S]*?<\/title>/g, "").replace(/\s(inkscape|sodipodi|xmlns:(inkscape|sodipodi|dc|cc|rdf)|data-name)(:[\w-]+)?="[^"]*"/g, "").replace(/>\s+</g, "><").replace(/\s{2,}/g, " ").trim();
       const before = f.content.length; if (out.length < before) write(env, s, p, out);

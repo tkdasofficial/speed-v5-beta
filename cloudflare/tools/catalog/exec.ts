@@ -72,9 +72,20 @@ export const execTools = [
     },
   }),
   defineTool({
-    name: "get_command_result", category: "execution", description: "Status, exit code, output tail and diagnostics of a command job.",
-    inputSchema: z.object({ jobId: z.string().regex(/^job_\w+$/) }),
-    handler: async (a, env) => ({ data: shape(await read(env, a.jobId)) }),
+    name: "get_command_result", category: "execution", description: "Status, exit code, output tail and diagnostics of a command job. Without jobId: the latest dev server (or latest command) process with its runtime health.",
+    inputSchema: z.object({ jobId: z.string().regex(/^job_\w+$/).optional() }),
+    handler: async (a, env) => {
+      if (a.jobId) return { data: shape(await read(env, a.jobId)) };
+      const j = await import("../../functions/build/jobs.server");
+      const { d1 } = await import("@backend/d1");
+      const dev = await j.latestDevServer(env.userId, env.projectId!);
+      const [last] = await d1<{ id: string }>("SELECT id FROM runtime_jobs WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 1", [env.projectId, env.userId]);
+      const latest = last && last.id !== dev?.id ? await j.getJob(env.userId, env.projectId!, last.id) : null;
+      const heartbeatAgeSec = dev?.heartbeatAt ? Math.round((Date.now() - dev.heartbeatAt) / 1000) : null;
+      const devRunning = !!dev && dev.status === "running";
+      const health = !dev && !latest ? "no_processes" : devRunning ? (dev!.phase === "ready" && (heartbeatAgeSec ?? 999) < 45 ? "healthy" : dev!.phase === "starting" || dev!.phase === null ? "starting" : "unresponsive") : "idle";
+      return { data: { health, devServer: dev ? { ...shape(dev), heartbeatAgeSec } : null, latestCommand: latest ? shape(latest) : null } };
+    },
   }),
   defineTool({
     name: "wait_for_command", category: "execution", description: "Wait (up to ~50s) for a command job to finish and return its real result. Call again if still running.", timeoutMs: 60_000,
