@@ -109,7 +109,7 @@ export const taskControlTools = [
     },
   }),
   tk({
-    name: "cancel_task", readOnly: false, destructive: true, requiresConfirmation: false, idempotent: true, timeoutMs: 15_000,
+    name: "cancel_task", readOnly: false, idempotent: true, timeoutMs: 15_000,
     description: "Request cancellation of a background task in this project. Finished tasks are left as they are; the current agent task cannot cancel itself.",
     purpose: "Stop background work that is no longer needed.",
     capabilities: ["stop task", "abort job"],
