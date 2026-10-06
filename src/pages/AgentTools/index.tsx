@@ -9,7 +9,7 @@ export function AgentToolsPage() {
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState("");
-  useEffect(() => { agentTools({ data: {} } as never).then(setData, (e: Error) => setError(e.message)); }, []);
+  useEffect(() => { agentTools().then(setData, (e: Error) => setError(e.message)); }, []);
   const list = useMemo(() => (data?.tools ?? []).filter((t) => !q || `${t.tool_name} ${t.category} ${t.description}`.toLowerCase().includes(q.toLowerCase())), [data, q]);
   if (error) return <PageShell title="Agent tools"><StateBox title="Couldn't load tools" text={error} tone="error" /></PageShell>;
   if (!data) return <PageShell title="Agent tools"><StateBox title="Loading tools…" /></PageShell>;
