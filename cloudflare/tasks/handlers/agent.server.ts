@@ -295,8 +295,11 @@ async function buildStep(c: TaskContext, st: State, p: P): Promise<StepResult> {
       const { publish } = await import("@realtime/publish.server");
       await publish(c.task.user_id, "filerev", "upsert", `${pid}:${r.revision}`, r.revision, { id: `${pid}:${r.revision}`, projectId: pid, revision: r.revision, changed: r.changed.slice(0, 200), version: r.revision });
       await c.emit("files", { revision: r.revision, changed: r.changed.slice(0, 50) });
-      await ar.files(r.changed, r.revision, { stepId: rid, batchId });
-      await ar.progress({ type: "applied", files: r.changed, ok: true }, rid);
+      // Folders appear in the revision's change list; file events are for files only.
+      const folders = new Set((await fs.loadStore(pid)).store.folders());
+      const fileChanges = r.changed.filter((x) => !folders.has(x));
+      await ar.files(fileChanges, r.revision, { stepId: rid, batchId });
+      await ar.progress({ type: "applied", files: fileChanges, ok: true }, rid);
     }
   }
   await ar.finishStep(rid, { status: stopped ? "cancelled" : failedIds.length && built !== true ? "failed" : "succeeded", outputRef: `rev:${st.baseRevision ?? 0}`, ...(built === false ? { error: log.filter((l) => /error/i.test(l)).slice(-1)[0]?.slice(0, 600) ?? "Check failed" } : {}) });
