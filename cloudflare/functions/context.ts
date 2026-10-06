@@ -45,7 +45,7 @@ export function requestOrigin() {
 }
 
 /** Cloudflare Secrets Store bindings expose `get()`; resolve them once per request so code reads plain strings via envStr(). */
-const BINDINGS = new Set(["DB", "SANDBOX_DB", "TASKS"]);
+const BINDINGS = new Set(["DB", "SANDBOX_DB", "AGENT_DB", "TASKS"]);
 export async function resolveSecrets(env: Env): Promise<Env> {
   const out: Env = { ...env };
   await Promise.all(Object.entries(env).map(async ([k, v]) => {
