@@ -37,8 +37,10 @@ const storeId = await ensureStore();
 await pushSecrets(storeId);
 const stored = await listStored(storeId);
 // Sandbox D1 (project codebases) is found or created by name, and its migrations applied.
-const { ensureSandboxDb } = await import("../sandbox/setup");
+const { ensureSandboxDb, ensureAgentDb } = await import("../sandbox/setup");
 const sandboxDbId = await ensureSandboxDb();
+// Agent D1 (agent runs, steps, messages, tool calls, checkpoints, usage) — found or created by name.
+const agentDbId = await ensureAgentDb();
 const { migrateMain } = await import("../sandbox/setup");
 await migrateMain(env["CLOUDFLARE_D1_DATABASE_ID"]!);
 const settings = (await (await fetch(`${API}/scripts/${NAME}/settings`, { headers: auth })).json()) as { result?: { bindings?: { type: string; name: string }[] } };
@@ -50,6 +52,7 @@ const metadata = {
   bindings: [
     { type: "d1", name: "DB", id: env["CLOUDFLARE_D1_DATABASE_ID"] },
     { type: "d1", name: "SANDBOX_DB", id: sandboxDbId },
+    { type: "d1", name: "AGENT_DB", id: agentDbId },
     { type: "durable_object_namespace", name: "TASKS", class_name: "TaskRunner" },
     { type: "plain_text", name: "REALTIME_URL", text: env["REALTIME_URL"] },
     { type: "plain_text", name: "ALLOWED_ORIGINS", text: env["ALLOWED_ORIGINS"] },

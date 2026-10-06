@@ -30,6 +30,14 @@ export async function ensureSandboxDb(): Promise<string> {
   return id;
 }
 
+/** Agent D1 (agent runtime state): found or created by name "agent", migrations from cloudflare/migrations-agent. */
+export async function ensureAgentDb(): Promise<string> {
+  const list = await cf<{ uuid: string; name: string }[]>(`?name=agent`);
+  const id = list.find((d) => d.name === "agent")?.uuid ?? (await cf<{ uuid: string }>("", { method: "POST", body: JSON.stringify({ name: "agent" }) })).uuid;
+  await migrate(id, `${import.meta.dir}/../migrations-agent`);
+  return id;
+}
+
 /** Main database: applies pending cloudflare/migrations. Databases created before tracking existed get
  *  001–009 recorded as applied (their tables are present), so only newer migrations run. */
 export async function migrateMain(id: string) {
