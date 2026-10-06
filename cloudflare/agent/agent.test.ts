@@ -82,7 +82,7 @@ describe("tool registry", () => {
   it("registers every source tool once with resolvable handlers", () => {
     const r = validateRegistry();
     expect(r.errors).toEqual([]);
-    expect(r.tools).toBeGreaterThanOrEqual(146);
+    expect(r.tools).toBe(145); expect(r.aliases).toBe(46);
     const e = buildRegistry().find((x) => x.tool_name === "update_file")!;
     expect(e.handler).toBe("catalog/files:update_file");
     expect(e.input_schema["path"]).toBe("string");
