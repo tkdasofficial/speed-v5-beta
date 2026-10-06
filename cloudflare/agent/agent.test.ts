@@ -36,7 +36,7 @@ describe("task grouping and batching", () => {
   });
   it("keeps risky work in its own batch", () => {
     const b = groupTasks(analyzeTask("Change the header text, add login with a database, and change the button color"));
-    expect(b.map((x) => x.taskIds)).toEqual([["t1"], ["t2"], ["t3"]]);
+    expect(b.map((x) => x.taskIds)).toEqual([["t1", "t3"], ["t2"]]);
     expect(b[1]!.risk).toBe("high");
   });
   it("caps a grouped batch at six tasks", () => {
