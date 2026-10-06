@@ -12,11 +12,6 @@ async function session(projectId: string, confirmed = false) {
   return { user, s: openToolSession({ userId: user.id, projectId, confirmed }) };
 }
 
-export async function toolList(raw: unknown) {
-  const { projectId, capability } = z.object({ projectId: v.id, capability: z.string().max(200).optional() }).parse(raw);
-  const { s } = await session(projectId);
-  return s.execute(capability ? "find_tools" : "list_tool_categories", capability ? { capability } : {});
-}
 export async function toolExecute(raw: unknown) {
   const { projectId, confirm, ...c } = call.extend({ projectId: v.id, confirm: z.boolean().default(false) }).parse(raw);
   const { s } = await session(projectId, confirm);

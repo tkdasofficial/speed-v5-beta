@@ -11,4 +11,3 @@ export const agentToolCalls = endpoint<typeof A.agentToolCalls>("agentToolCalls"
 export const agentResult = endpoint<typeof A.agentResult>("agentResult");
 export const agentCancel = endpoint<typeof A.agentCancel>("agentCancel");
 export const agentResume = endpoint<typeof A.agentResume>("agentResume");
-export const agentTools = endpoint<typeof A.agentTools>("agentTools");
