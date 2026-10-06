@@ -10,6 +10,8 @@ import type { TaskHandler, TaskContext, StepResult } from "../registry";
 import { FatalError } from "../registry";
 import type { AgentPlan } from "../../functions/ai/orchestrator.server";
 import type { MemoryFileStore } from "../../../sandbox/workspace/workspace";
+import { AgentRun } from "../../agent/run.server";
+import type { Batch, SubTask } from "../../agent/grouping";
 
 const MAX_ROUNDS = 12;
 const MAX_REPAIRS = 3; // failed checks inside the build loop before giving up
@@ -20,8 +22,11 @@ type State = {
   phase?: Phase; changed?: string[]; created?: string[]; lastCheck?: boolean | null; round?: number; results?: string; failedBuilds?: number;
   failedIds?: string[]; baseRevision?: number; mutated?: boolean; plan?: AgentPlan; planVersion?: number; decisionSeq?: number;
   feedback?: string; snippets?: string; fixAttempts?: number; validation?: string; test?: string; n?: number;
+  /** Agent Core: analyzed sub-tasks, batches (with their agent_steps ids), relevant files and summary status. */
+  ag?: { tasks: SubTask[]; batches: Batch[]; batchSteps: Record<string, string>; relevant?: string[] };
+  finalSummaryStatus?: string;
 };
-type P = { prompt?: string; model?: "speed" | "flash" | "heavy"; depth?: "quick" | "balanced" | "deep"; plan?: boolean; clientMessageId?: string };
+type P = { prompt?: string; model?: "speed" | "flash" | "heavy"; depth?: "quick" | "balanced" | "deep"; plan?: boolean; clientMessageId?: string; parentRunId?: string };
 
 /** Running / completed labels for one action ("Creating styles.css" → "Created styles.css"). */
 function labels(name: string, target: string | null): { kind: string; running: string; done: string; failed: string } {
@@ -88,6 +93,12 @@ async function say(c: TaskContext, st: State, text: string, role: "user" | "assi
   await c.emit("message", { messageId: m.id, round: st.round ?? 0 });
 }
 const phase = (c: TaskContext, name: string) => c.emit("phase", { phase: name });
+/** Locally generated progress (no AI), shown in chat and recorded in Agent D1. */
+async function tell(c: TaskContext, st: State, e: import("../../agent/messages").ProgressEvent, stepId?: string | null) {
+  const text = await (await AgentRun.for(c)).progress(e, stepId);
+  await say(c, st, text);
+}
+const batchOf = (st: State) => (st.ag?.batches.length === 1 ? st.ag.batches[0]!.id : null);
 
 /** Emits action.started, runs the work, then emits the completed/failed action with its real result. */
 async function act<T>(c: TaskContext, st: State, a: { kind: string; running: string; done: string; failed?: string; round?: number }, work: () => Promise<{ ok: boolean; result?: T; error?: string; done?: string }> | { ok: boolean; result?: T; error?: string; done?: string }) {
@@ -109,6 +120,12 @@ async function withCancel<T>(c: TaskContext, p: Promise<T>): Promise<T | null> {
 
 async function end(c: TaskContext, st: State, status: "done" | "failed" | "denied", text: string, error?: string): Promise<StepResult> {
   await say(c, st, text);
+  const ar = await AgentRun.for(c);
+  await ar.store.addMessage(ar.runId, { role: "agent", type: status === "done" ? "final_summary" : "error", content: text }).catch((e) => console.error("[agent-d1]", (e as Error).message));
+  for (const [, sid] of Object.entries(st.ag?.batchSteps ?? {})) await ar.finishStep(sid, { status: status === "done" ? "succeeded" : status === "denied" ? "cancelled" : "failed", ...(status === "failed" ? { error: error ?? null } : {}) });
+  await ar.progress({ type: "complete", changed: st.changed?.length ?? 0, ok: status === "done" });
+  await ar.checkpoint({ type: "stage", state: { phase: status, revision: st.baseRevision ?? 0 }, completed: st.changed ?? [], pending: [], next: null });
+  await ar.finish(status === "done" ? "completed" : status === "denied" ? "cancelled" : "failed", { failureReason: status === "done" ? null : (error ?? (status === "denied" ? "Plan denied" : text.slice(0, 500))), finalSummaryStatus: st.finalSummaryStatus ?? "skipped", metadata: { changed: (st.changed ?? []).slice(0, 100), created: (st.created ?? []).slice(0, 100), validation: st.validation ?? null, test: st.test ?? null } });
   await phase(c, status === "done" ? "completed" : status);
   await c.emit("run.end", { status, ...(error ? { error } : {}), mutated: !!st.mutated, revision: st.baseRevision ?? 0 });
   // Successful builds of React + Vite projects start a runtime preview build (unchanged sources are skipped).
@@ -128,27 +145,39 @@ async function planStep(c: TaskContext, st: State, p: P): Promise<StepResult> {
   await c.progress(0.02, "Thinking");
   const { store } = await fs.loadStore(pid);
   const files = store.list().map((f) => f.path).sort();
+  const ar = await AgentRun.for(c);
   if (st.snippets === undefined) {
+    const { buildContext, contextSnippets } = await import("../../agent/context");
+    const actx = buildContext({ request: p.prompt ?? "", projectId: pid, projectName: "", files: store.list(), tasks: st.ag?.tasks ?? [], stage: "planning" });
+    await ar.progress({ type: "inspect", fileCount: files.length });
     // Inspect only the files that matter for a plan: small text sources, entry page first, capped context.
     const r = await act(c, st, { kind: "inspect", running: "Analyzing existing project", done: "Project analyzed" }, () => {
       const text = store.list().filter((f) => f.encoding === "utf8" && /\.(html?|css|js|mjs|json|md|txt|svg)$/i.test(f.path) && f.content.length < 60000)
         .sort((a, b) => (a.path === "index.html" ? -1 : b.path === "index.html" ? 1 : a.content.length - b.content.length)).slice(0, 8);
       let budget = 16000; const parts: string[] = [];
       for (const f of text) { if (budget <= 0) break; const s = f.content.slice(0, Math.min(4000, budget)); budget -= s.length; parts.push(`--- ${f.path}${f.content.length > s.length ? " (truncated)" : ""}\n${s}`); }
-      return { ok: true, result: parts.join("\n"), done: files.length ? `Project analyzed · ${files.length} file${files.length === 1 ? "" : "s"}` : "Project analyzed · empty project" };
+      const rel = contextSnippets(actx);
+      return { ok: true, result: rel ? `${rel}\n${parts.filter((x) => !actx.relevantFiles.some((f) => x.startsWith(`--- ${f.path}`))).join("\n")}`.slice(0, 20000) : parts.join("\n"), done: files.length ? `Project analyzed · ${files.length} file${files.length === 1 ? "" : "s"}` : "Project analyzed · empty project" };
     });
     st.snippets = (r.result as string | undefined) ?? "";
+    if (st.ag) st.ag.relevant = actx.relevantFiles.map((f) => f.path);
+    await ar.progress({ type: "identify", files: st.ag?.relevant ?? [], taskCount: st.ag?.tasks.length ?? 1 });
   }
   if (await c.cancelled()) return { done: false, delayMs: 10 };
   await phase(c, "planning");
   await c.progress(0.08, "Creating Plan");
   const [proj] = await d1<{ name: string }>("SELECT name FROM projects WHERE id = ?", [pid]);
   const { createPlan } = await import("../../functions/ai/orchestrator.server");
+  const planT0 = Date.now();
   const out = await withCancel(c, createPlan({ model: p.model ?? "speed", depth: p.depth ?? "balanced", projectName: proj?.name ?? "project", prompt: p.prompt ?? "", files, snippets: st.snippets, previous: st.plan, feedback: st.feedback }));
   if (!out) return { done: false, delayMs: 10 };
   if (out.usedModel) await c.emit("model", { stage: "plan", model: out.usedModel, fallbacks: (out.fallbacks ?? []) as unknown as Json });
+  // Real execution call (planning), recorded honestly; progress text never creates usage rows.
+  await ar.usage({ provider: (out.usedModel ?? "unknown").split("/")[0]!, model: out.usedModel ?? "unknown", requestType: "plan", latencyMs: Date.now() - planT0, status: "succeeded" });
   if ("answer" in out) return end(c, st, "done", out.answer);
   st.plan = out.plan; st.planVersion = (st.planVersion ?? 0) + 1; delete st.feedback;
+  await ar.checkpoint({ type: "stage", state: { phase: "awaiting", planVersion: st.planVersion, baseRevision: st.baseRevision }, completed: ["analyze", "plan"], pending: (st.ag?.batches ?? []).map((b) => b.id), next: "awaiting_approval" });
+  await ar.stage("awaiting_approval");
   await c.emit("plan", { version: st.planVersion, plan: out.plan as unknown as Json });
   await phase(c, "awaiting_approval");
   st.phase = "awaiting";
@@ -172,7 +201,14 @@ async function decisionStep(c: TaskContext, st: State): Promise<StepResult> {
   await c.progress(0.12, "Thinking");
   await say(c, st, "I'll start building the project now.");
   await phase(c, "building");
-  st.phase = "building"; st.round = 0; st.results = "";
+  st.phase = "building"; st.round = 0;
+  {
+    const ar = await AgentRun.for(c);
+    await ar.stage("building", "running");
+    for (const sid of Object.values(st.ag?.batchSteps ?? {})) await ar.finishStep(sid, { status: "running" });
+    const { batchPrompt } = await import("../../agent/grouping");
+    st.results = st.ag ? `TASK BATCHES (do each batch's related edits together, in as few rounds as possible):\n${batchPrompt(st.ag.tasks, st.ag.batches)}${st.ag.relevant?.length ? `\nMost relevant files: ${st.ag.relevant.join(", ")}` : ""}` : "";
+  }
   return { done: false, delayMs: 10 };
 }
 
@@ -196,11 +232,23 @@ async function buildStep(c: TaskContext, st: State, p: P): Promise<StepResult> {
   const { loadTools } = await import("../../tools/index");
   const { catalogText } = await import("../../tools/exposure");
   loadTools();
+  const ar = await AgentRun.for(c);
+  const batchId = batchOf(st);
+  const roundT0 = Date.now();
   const step = await withCancel(c, runAgentRound({ model: p.model ?? "speed", depth: p.depth ?? "balanced", plan: false, projectName: proj?.name ?? "project", round, files: store.list().map((f) => f.path).sort(), results: st.results ?? "", history: hist, tools: catalogText("building"), ...(st.plan ? { approvedPlan: planText(st.plan) } : {}) }));
   if (!step) return { done: false, delayMs: 10 };
   await c.emit("model", { stage: "build", round, model: step.usedModel, fallbacks: step.fallbacks as unknown as Json });
+  const rid = await ar.step({ type: "edit", name: `Build round ${round + 1}`, batchId, description: step.message.slice(0, 500), metadata: { actions: (step.actions as Step[]).length } });
+  await ar.usage({ stepId: rid, provider: String(step.usedModel ?? "unknown").split("/")[0]!, model: String(step.usedModel ?? "unknown"), requestType: "build_round", latencyMs: Date.now() - roundT0, status: "succeeded" });
   if (await c.cancelled()) return { done: false, delayMs: 10 };
-  if (step.message && (step.actions.length || !step.done)) await say(c, st, step.message);
+  {
+    const acts = step.actions as Step[];
+    const writes = [...new Set(acts.filter((a) => a.kind === "create" || a.kind === "edit" || a.kind === "delete" || (a.kind === "tool" && /^(write|update|create|delete|apply|replace)_/.test(a.name ?? ""))).map((a) => a.path ?? (a.args?.["path"] as string | undefined)).filter((x): x is string => !!x))];
+    const reads = [...new Set(acts.filter((a) => a.kind === "read").map((a) => a.path!).filter(Boolean))];
+    if (writes.length) await tell(c, st, { type: "apply", files: writes, batchLabel: st.ag?.batches.find((b) => b.id === batchId)?.label }, rid);
+    else if (reads.length) await ar.progress({ type: "read", files: reads }, rid);
+    else if (step.message && !step.done) await say(c, st, step.message);
+  }
 
   // Every action goes through the ToolOrchestrator: policy → args → prerequisites → execute → audit (tool_operations).
   const sess = await session(c);
@@ -218,7 +266,7 @@ async function buildStep(c: TaskContext, st: State, p: P): Promise<StepResult> {
     const target = typeof args["path"] === "string" ? (args["path"] as string) : typeof args["query"] === "string" ? `"${args["query"] as string}"` : typeof args["name"] === "string" ? (args["name"] as string) : null;
     const L = VERIFY.has(name) ? labels("verify_project", null) : labels(name, target);
     const r = await act(c, st, { kind: L.kind, running: L.running, done: L.done, failed: L.failed, round }, async () => {
-      const res = await sess.execute(name, args);
+      const res = await ar.tool(sess, name, args, { stepId: rid, batchId });
       log.push(fmt(res));
       const ok = VERIFY.has(res.toolName) ? verifyOk(res) : res.success;
       return ok ? { ok: true } : { ok: false, error: (res.error?.message ?? fmt(res)).slice(0, 600) };
@@ -231,7 +279,7 @@ async function buildStep(c: TaskContext, st: State, p: P): Promise<StepResult> {
   const wrote = sess.pendingChanges.length > 0;
   if (wrote && built === null && !stopped) {
     const r = await act(c, st, { kind: "check", running: "Checking project", done: "Check passed", failed: "Check failed", round }, async () => {
-      const res = await sess.execute("verify_project", {});
+      const res = await ar.tool(sess, "verify_project", {}, { stepId: rid, batchId });
       log.push(`(automatic) ${fmt(res)}`);
       return verifyOk(res) ? { ok: true } : { ok: false, error: fmt(res).slice(0, 600) };
     });
@@ -247,10 +295,22 @@ async function buildStep(c: TaskContext, st: State, p: P): Promise<StepResult> {
       const { publish } = await import("@realtime/publish.server");
       await publish(c.task.user_id, "filerev", "upsert", `${pid}:${r.revision}`, r.revision, { id: `${pid}:${r.revision}`, projectId: pid, revision: r.revision, changed: r.changed.slice(0, 200), version: r.revision });
       await c.emit("files", { revision: r.revision, changed: r.changed.slice(0, 50) });
+      // Folders appear in the revision's change list; file events are for files only.
+      const folders = new Set((await fs.loadStore(pid)).store.folders());
+      const fileChanges = r.changed.filter((x) => !folders.has(x));
+      await ar.files(fileChanges, r.revision, { stepId: rid, batchId });
+      await ar.progress({ type: "applied", files: fileChanges, ok: true }, rid);
     }
   }
+  await ar.finishStep(rid, { status: stopped ? "cancelled" : failedIds.length && built !== true ? "failed" : "succeeded", outputRef: `rev:${st.baseRevision ?? 0}`, ...(built === false ? { error: log.filter((l) => /error/i.test(l)).slice(-1)[0]?.slice(0, 600) ?? "Check failed" } : {}) });
+  await ar.checkpoint({ stepId: rid, type: "batch", state: { phase: "building", round: round + 1, lastCheck: built, failedBuilds: st.failedBuilds ?? 0 }, completed: st.changed ?? [], pending: (st.ag?.batches ?? []).map((b) => b.id), next: step.done ? "validating" : "building" });
   if (stopped) return { done: false, delayMs: 10 };
   if (built !== null) st.lastCheck = built;
+  if (built === false) {
+    const err = log.filter((l) => /error/i.test(l)).slice(-1)[0] ?? "Check failed";
+    await ar.progress({ type: "build", ok: false, error: err }, rid);
+    if ((st.failedBuilds ?? 0) + 1 < MAX_REPAIRS) { await ar.step({ type: "recover", name: `Repair after failed check (${(st.failedBuilds ?? 0) + 1}/${MAX_REPAIRS})`, parentStepId: rid, status: "succeeded" }); await ar.progress({ type: "retry", what: "the failed check", attempt: (st.failedBuilds ?? 0) + 2, max: MAX_REPAIRS }); }
+  } else if (built === true) await ar.progress({ type: "build", ok: true }, rid);
   if (built === true) { if (failedIds.length) await c.emit("fixed", { ids: failedIds }); st.failedIds = []; st.failedBuilds = 0; }
   else st.failedIds = failedIds.slice(-50);
   if (built === false && (st.failedBuilds = (st.failedBuilds ?? 0) + 1) >= MAX_REPAIRS) {
@@ -277,6 +337,10 @@ async function validateStep(c: TaskContext, st: State): Promise<StepResult> {
   const sess = await session(c);
   await phase(c, "validating");
   await c.progress(0.8, "Validating");
+  const ar = await AgentRun.for(c);
+  await ar.stage("verifying", "verifying");
+  const vid = await ar.step({ type: "verify", name: "Validate requirements", batchId: batchOf(st) });
+  await ar.progress({ type: "verify" }, vid);
   const plan = st.plan;
   const changed = new Set(st.changed ?? []);
   const v = await act(c, st, { kind: "check", running: "Validating requirements", done: "Requirements verified", failed: "Validation failed" }, async () => {
@@ -297,22 +361,28 @@ async function validateStep(c: TaskContext, st: State): Promise<StepResult> {
     const proj = validateProject(store);
     for (const e of proj.errors.slice(0, 10)) { const d = e as unknown as { path?: string; line?: number; message?: string }; issues.push(`${d.path ? `${d.path}${d.line ? `:${d.line}` : ""}: ` : ""}${d.message ?? JSON.stringify(e).slice(0, 300)}`); };
     for (const d of validateReferences(store).filter((x) => x.severity === "error").slice(0, 10)) issues.push(`${d.file}${d.line ? `:${d.line}` : ""}: ${d.message}`);
-    const sec = await sess.execute("scan_secrets", {});
+    const sec = await ar.tool(sess, "scan_secrets", {}, { stepId: vid });
     if (sec.success && ((sec.data as { findings?: unknown[] })?.findings?.length ?? 0) > 0) issues.push(`Secrets found in source files — move them to environment variables: ${JSON.stringify((sec.data as { findings: unknown[] }).findings.slice(0, 5))}`);
     return issues.length ? { ok: false, result: issues, error: issues.slice(0, 6).join("\n") } : { ok: true, result: [] };
   });
   let issues = (v.result as string[] | undefined) ?? [];
   st.validation = v.ok ? "Passed" : "Failed";
+  await ar.finishStep(vid, { status: v.ok ? "succeeded" : "failed", error: v.ok ? null : issues.slice(0, 6).join("\n") });
+  await ar.progress({ type: "verify", ok: v.ok, issues }, vid);
   if (v.ok) {
     // Testing: the Sandbox-only architecture has no terminal/browser runtime yet, so the test is the transactional
     // static build (validate → stage → verify). Speed Runtime can replace this step with a real build + run later.
     await phase(c, "testing");
     await c.progress(0.9, "Testing");
+    const tid = await ar.step({ type: "test", name: "Build and test project", batchId: batchOf(st) });
+    await ar.progress({ type: "test" }, tid);
     const t = await act(c, st, { kind: "check", running: "Building and testing project", done: "Build test passed", failed: "Build test failed" }, async () => {
-      const res = await sess.execute("verify_project", {});
+      const res = await ar.tool(sess, "verify_project", {}, { stepId: tid });
       return verifyOk(res) ? { ok: true } : { ok: false, error: fmt(res).slice(0, 800) };
     });
     st.test = t.ok ? "Passed" : "Failed";
+    await ar.finishStep(tid, { status: t.ok ? "succeeded" : "failed", error: t.ok ? null : (t.error ?? null) });
+    await ar.progress({ type: "test", ok: t.ok, ...(t.ok ? {} : { error: t.error ?? "" }) }, tid);
     if (!t.ok) issues = [t.error ?? "Build test failed"];
   }
   if (!issues.length) {
@@ -322,9 +392,31 @@ async function validateStep(c: TaskContext, st: State): Promise<StepResult> {
     const feats = [...(plan?.pages ?? []), ...(plan?.functional ?? []), ...(plan?.design ?? [])].slice(0, 8);
     const list = (h: string, l: string[]) => (l.length ? `${h}:\n${l.slice(0, 20).map((x) => `- ${x}`).join("\n")}` : "");
     const text = ["Build Complete", plan?.summary || plan?.title || "", list("Implemented", feats), list("Files created", created), list("Files modified", modified), list("Files deleted", deleted), `Validation: ${st.validation}\nBuild/Test: ${st.test ?? "Passed"}`].filter(Boolean).join("\n\n");
-    return end(c, st, "done", text);
+    // The run's single final-summary AI call, over the structured, verified result. Falls back to the factual text.
+    const sid = await ar.step({ type: "summary", name: "Final summary" });
+    let finalText = text; const t0 = Date.now();
+    try {
+      const { finalSummary } = await import("../../functions/ai/orchestrator.server");
+      const r = await finalSummary({ model: (c.payload as P).model ?? "speed", result: {
+        request: (c.payload as P).prompt ?? "", tasks: (st.ag?.tasks ?? []).map((t) => t.text), batches: (st.ag?.batches ?? []).map((b) => ({ id: b.id, kind: b.kind, tasks: b.taskIds.length })),
+        filesCreated: created, filesModified: modified, filesDeleted: deleted, planned: feats, validation: st.validation, buildTest: st.test ?? "Passed",
+      } });
+      finalText = r.text; st.finalSummaryStatus = "generated";
+      await ar.usage({ stepId: sid, provider: r.provider, model: r.model, requestType: "final_summary", latencyMs: r.latencyMs, status: "succeeded", metadata: { fallbacks: r.fallbacks } });
+      await ar.finishStep(sid, { status: "succeeded" });
+    } catch (e) {
+      st.finalSummaryStatus = "failed";
+      await ar.usage({ stepId: sid, provider: "unknown", model: "unknown", requestType: "final_summary", latencyMs: Date.now() - t0, status: "failed", metadata: { error: (e as Error).message.slice(0, 300) } });
+      await ar.finishStep(sid, { status: "failed", error: (e as Error).message });
+    }
+    return end(c, st, "done", finalText);
   }
   st.fixAttempts = (st.fixAttempts ?? 0) + 1;
+  if (st.fixAttempts <= MAX_FIX_ATTEMPTS) {
+    await ar.step({ type: "recover", name: `Automatic fix ${st.fixAttempts}/${MAX_FIX_ATTEMPTS}`, status: "succeeded", metadata: { issues: issues.slice(0, 6) } });
+    await tell(c, st, { type: "fix", attempt: st.fixAttempts, max: MAX_FIX_ATTEMPTS, issues });
+    await ar.checkpoint({ type: "recovery", state: { phase: "building", fixAttempts: st.fixAttempts }, completed: st.changed ?? [], pending: issues.slice(0, 20), next: "building" });
+  }
   if (st.fixAttempts > MAX_FIX_ATTEMPTS) {
     return end(c, st, "failed", `Not finished. Validation still fails after ${MAX_FIX_ATTEMPTS} automatic fixes:\n\n${issues.slice(0, 6).map((i) => `- ${i}`).join("\n")}`, "Validation failed after automatic fixes.");
   }
@@ -350,6 +442,18 @@ export const agentHandler: TaskHandler = {
       const um = await saveMessage(c, "user", p.prompt);
       await c.emit("run.start", { prompt: p.prompt.slice(0, 500), messageId: um.id, clientMessageId: p.clientMessageId ?? null, revision: st.baseRevision });
       st.phase = "planning";
+      const ar = await AgentRun.for(c);
+      await ar.start({ projectId: pid, userId: c.task.user_id, taskText: p.prompt, parentRunId: p.parentRunId ?? null, metadata: { model: p.model ?? "speed", depth: p.depth ?? "balanced" } });
+      const { analyzeTask, groupTasks } = await import("../../agent/grouping");
+      const tasks = analyzeTask(p.prompt); const batches = groupTasks(tasks);
+      const aid = await ar.step({ type: "analyze", name: "Analyze and group task", metadata: { tasks, batches } });
+      const batchSteps: Record<string, string> = {};
+      for (const b of batches) batchSteps[b.id] = (await ar.step({ type: "batch", name: b.label || b.id, batchId: b.id, status: "pending", parentStepId: aid, metadata: { taskIds: b.taskIds, kind: b.kind, risk: b.risk } })) ?? "";
+      await ar.finishStep(aid, { status: "succeeded" });
+      st.ag = { tasks, batches, batchSteps };
+      await ar.progress({ type: "plan", batches: batches.length, tasks: tasks.length }, aid);
+      await ar.checkpoint({ stepId: aid, type: "stage", state: { phase: "planning", baseRevision: st.baseRevision }, completed: ["analyze"], pending: batches.map((b) => b.id), next: "planning" });
+      await ar.stage("planning", "running");
     }
     switch (st.phase) {
       case "planning": return planStep(c, st, p);
@@ -362,5 +466,9 @@ export const agentHandler: TaskHandler = {
     const st = c.state as State;
     await c.emit("phase", { phase: "cancelled" }).catch(() => undefined);
     await c.emit("run.end", { status: "stopped", mutated: !!st.mutated, revision: st.baseRevision ?? 0 });
+    const ar = await AgentRun.for(c);
+    for (const sid of Object.values(st.ag?.batchSteps ?? {})) await ar.finishStep(sid, { status: "cancelled" });
+    await ar.checkpoint({ type: "stage", state: { phase: st.phase ?? "planning", round: st.round ?? 0, revision: st.baseRevision ?? 0 }, completed: st.changed ?? [], pending: (st.ag?.batches ?? []).map((b) => b.id), next: st.phase ?? "planning" });
+    await ar.finish("cancelled", { failureReason: "Stopped by user" });
   },
 };

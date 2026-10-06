@@ -1,0 +1,14 @@
+.at-summary { display: flex; flex-wrap: wrap; gap: 12px; font-size: 14px; color: var(--muted-foreground); margin-bottom: 12px; }
+.at-summary b { color: var(--foreground); font-weight: 700; }
+.at-ok { color: var(--primary); font-weight: 700; }
+.at-bad { color: var(--destructive); font-weight: 700; }
+.at-search { width: 100%; height: 44px; padding: 0 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); color: var(--foreground); font: 500 14px/1 Manrope, sans-serif; margin-bottom: 12px; }
+.at-list { display: grid; gap: 10px; list-style: none; padding: 0; margin: 0; }
+.at-item { padding: 12px 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--card); }
+.at-row { display: flex; justify-content: space-between; gap: 8px; font-size: 15px; }
+.at-row b { font-weight: 700; word-break: break-all; }
+.at-row span { font-size: 12px; }
+.at-item p { margin: 6px 0 8px; font-size: 13px; color: var(--muted-foreground); }
+.at-item dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; font-size: 12px; }
+.at-item dt { color: var(--muted-foreground); font-weight: 600; }
+.at-item dd { margin: 0; word-break: break-all; }

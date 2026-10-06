@@ -149,6 +149,17 @@ export async function runAgent(input: { model: AiModel; depth: AiDepth; plan?: b
   return answer.slice(0, 20000);
 }
 
+/** The Agent's single final-summary call: polishes the structured, already-verified run result. Facts come only from `result`. */
+export async function finalSummary(input: { model: AiModel; result: Record<string, unknown> }) {
+  const t0 = Date.now();
+  const messages: Msg[] = [
+    { role: "system", content: "You are Speed, an AI software agent. Write the final message to the user about a finished task. Use ONLY the facts in the JSON you receive; never invent files, features or results. Plain, friendly language for a non-technical reader. 3–8 short lines: one opening sentence on what is done, then a short bullet list of what changed, then the check result. No code blocks." },
+    { role: "user", content: JSON.stringify(input.result).slice(0, 12000) },
+  ];
+  const r = await callChain(chainFor(input.model), messages, { maxTokens: 1500, think: false, firstByteMs: 60_000 }, nonEmpty);
+  return { text: r.value.trim().slice(0, 6000), provider: r.used.provider, model: r.used.id, latencyMs: Date.now() - t0, fallbacks: r.failed };
+}
+
 // ---- Agent loop: message → actions → message … ----
 export type AgentActionKind = "read" | "create" | "edit" | "delete" | "think" | "check" | "tool";
 export type AgentStepAction = { kind: AgentActionKind; path?: string; content?: string; find?: string; replace?: string; note?: string; name?: string; args?: Record<string, unknown> };

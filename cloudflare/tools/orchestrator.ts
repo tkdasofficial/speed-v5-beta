@@ -1,7 +1,7 @@
 // ToolOrchestrator (spec §2): the only way tools run. Policy → arguments → prerequisites → execute (timeout, retry,
 // cancellation) → normalize → state update → audit. Storage and project IO are injected so the core is testable.
 import type { MemoryFileStore } from "../../sandbox/workspace/workspace";
-import { findToolsByCapability, getTool, getToolMetadata } from "./registry";
+import { findToolsByCapability, getTool, getToolMetadata, isToolEnabled } from "./registry";
 import { checkPolicy, grantedPermissions } from "./policy";
 import { LIMITS, LoopGuard, normalizeError, normalizeSuccess, toFailure } from "./guard";
 import { checkPrerequisites } from "./prerequisites";
@@ -83,6 +83,7 @@ export class ToolSession {
     const t0 = Date.now();
     const tool = getTool(name);
     if (!tool) return normalizeError(id, name, new ToolFailure("UNKNOWN_TOOL", `No tool for "${nameOrCapability}". Use find_tools{capability} to discover tools.`, false, { suggestions: findToolsByCapability(nameOrCapability, { limit: 5 }).map((x) => x.name) }, "find_tools"), 0, 0);
+    if (!isToolEnabled(name)) return normalizeError(id, name, new ToolFailure("PERMISSION_DENIED", `Tool "${name}" is disabled in the Agent Tool Registry.`), 0, 0);
     const depth = parentOp ? (this.depths.get(parentOp) ?? 0) + 1 : 0;
     if (depth >= LIMITS.maxDepth) return normalizeError(id, name, new ToolFailure("LOOP_DETECTED", "Nested orchestration too deep"), 0, 0);
     let attempts = 0;

@@ -15,6 +15,7 @@ import { Route as FaqRouteImport } from './routes/faq'
 import { Route as PrivacyPolicyRouteImport } from './routes/privacy-policy'
 import { Route as TermsServiceRouteImport } from './routes/terms-service'
 import { Route as AuthenticatedAccountRouteImport } from './routes/_authenticated/account'
+import { Route as AuthenticatedAgentToolsRouteImport } from './routes/_authenticated/agent-tools'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as AuthenticatedGettingStartedRouteImport } from './routes/_authenticated/getting-started'
 import { Route as AuthenticatedImportRouteImport } from './routes/_authenticated/import'
@@ -57,6 +58,11 @@ const TermsServiceRoute = TermsServiceRouteImport.update({
 const AuthenticatedAccountRoute = AuthenticatedAccountRouteImport.update({
   id: '/account',
   path: '/account',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedAgentToolsRoute = AuthenticatedAgentToolsRouteImport.update({
+  id: '/agent-tools',
+  path: '/agent-tools',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
@@ -139,6 +145,7 @@ export interface FileRoutesByFullPath {
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/terms-service': typeof TermsServiceRoute
   '/account': typeof AuthenticatedAccountRoute
+  '/agent-tools': typeof AuthenticatedAgentToolsRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/getting-started': typeof AuthenticatedGettingStartedRoute
   '/import': typeof AuthenticatedImportRoute
@@ -160,6 +167,7 @@ export interface FileRoutesByTo {
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/terms-service': typeof TermsServiceRoute
   '/account': typeof AuthenticatedAccountRoute
+  '/agent-tools': typeof AuthenticatedAgentToolsRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/getting-started': typeof AuthenticatedGettingStartedRoute
   '/import': typeof AuthenticatedImportRoute
@@ -183,6 +191,7 @@ export interface FileRoutesById {
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/terms-service': typeof TermsServiceRoute
   '/_authenticated/account': typeof AuthenticatedAccountRoute
+  '/_authenticated/agent-tools': typeof AuthenticatedAgentToolsRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/_authenticated/getting-started': typeof AuthenticatedGettingStartedRoute
   '/_authenticated/import': typeof AuthenticatedImportRoute
@@ -206,6 +215,7 @@ export interface FileRouteTypes {
     | '/privacy-policy'
     | '/terms-service'
     | '/account'
+    | '/agent-tools'
     | '/dashboard'
     | '/getting-started'
     | '/import'
@@ -227,6 +237,7 @@ export interface FileRouteTypes {
     | '/privacy-policy'
     | '/terms-service'
     | '/account'
+    | '/agent-tools'
     | '/dashboard'
     | '/getting-started'
     | '/import'
@@ -249,6 +260,7 @@ export interface FileRouteTypes {
     | '/privacy-policy'
     | '/terms-service'
     | '/_authenticated/account'
+    | '/_authenticated/agent-tools'
     | '/_authenticated/dashboard'
     | '/_authenticated/getting-started'
     | '/_authenticated/import'
@@ -321,6 +333,13 @@ declare module '@tanstack/react-router' {
       path: '/account'
       fullPath: '/account'
       preLoaderRoute: typeof AuthenticatedAccountRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/agent-tools': {
+      id: '/_authenticated/agent-tools'
+      path: '/agent-tools'
+      fullPath: '/agent-tools'
+      preLoaderRoute: typeof AuthenticatedAgentToolsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/dashboard': {
@@ -426,6 +445,7 @@ declare module '@tanstack/react-router' {
 
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedAccountRoute: typeof AuthenticatedAccountRoute
+  AuthenticatedAgentToolsRoute: typeof AuthenticatedAgentToolsRoute
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
   AuthenticatedGettingStartedRoute: typeof AuthenticatedGettingStartedRoute
   AuthenticatedImportRoute: typeof AuthenticatedImportRoute
@@ -438,6 +458,7 @@ interface AuthenticatedRouteRouteChildren {
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedAccountRoute: AuthenticatedAccountRoute,
+  AuthenticatedAgentToolsRoute: AuthenticatedAgentToolsRoute,
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
   AuthenticatedGettingStartedRoute: AuthenticatedGettingStartedRoute,
   AuthenticatedImportRoute: AuthenticatedImportRoute,
