@@ -18,7 +18,8 @@ import * as build from "./api/build";
 export { TaskRunner } from "../tasks/runner";
 
 import * as toolsApi from "./api/tools";
-const handlers: Record<string, (data: unknown) => Promise<unknown>> = { ...toolsApi, ...auth, ...sync, ...github, ...imports, ...connections, ...tasks, ...files, ...build } as never;
+import * as agentApi from "./api/agent";
+const handlers: Record<string, (data: unknown) => Promise<unknown>> = { ...toolsApi, ...agentApi, ...auth, ...sync, ...github, ...imports, ...connections, ...tasks, ...files, ...build } as never;
 
 function cors(origin: string | null, env: Env): Record<string, string> {
   if (!isAllowedOrigin(origin, env)) return { Vary: "Origin" };

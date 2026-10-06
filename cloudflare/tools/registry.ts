@@ -125,3 +125,7 @@ export function findToolsByCapability(capability: string, opts: { limit?: number
 }
 
 export function _resetRegistryForTests() { tools.clear(); aliases.clear(); aliasDefs.clear(); }
+
+/** Tools switched off by the Agent Tool Registry (source-configured; the orchestrator refuses them). */
+export const disabledTools = new Set<string>();
+export const isToolEnabled = (name: string) => { const t = getTool(name); return !!t && !disabledTools.has(name) && !disabledTools.has(t.aliasOf ?? ""); };

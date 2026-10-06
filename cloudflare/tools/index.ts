@@ -13,9 +13,18 @@ import { registerCanonicalAliases } from "./aliases";
 import type { ToolDefinition } from "./types";
 
 let loaded = false;
+/** Catalog (source module) each production tool comes from — the handler reference shown by the Agent Tool Registry. */
+export const toolCatalog = new Map<string, string>();
+const CATALOGS: [string, readonly unknown[]][] = [
+  ["catalog/files", fileTools], ["catalog/core", coreTools], ["catalog/git", gitTools], ["catalog/deps#dependencies", depTools], ["catalog/deps#environment", envTools],
+  ["catalog/state#state", stateTools], ["catalog/state#planning", planningTools], ["catalog/state#knowledge", knowledgeTools], ["catalog/ops#logs", logTools],
+  ["catalog/ops#security", securityTools], ["catalog/ops#cleanup", cleanupTools], ["catalog/ops#recovery", recoveryTools], ["catalog/ops#integrations", integrationTools],
+  ["catalog/ops#orchestration", orchestrationTools], ["catalog/transform#transform", transformTools], ["catalog/transform#assets", assetTools], ["catalog/exec", execTools],
+  ["catalog/platform#build", buildArtifactTools], ["catalog/platform#integrations", integrationControlTools], ["catalog/platform#tasks", taskControlTools],
+];
 export function loadTools() {
   if (loaded) return allTools();
-  for (const t of [...fileTools, ...coreTools, ...gitTools, ...depTools, ...envTools, ...stateTools, ...planningTools, ...knowledgeTools, ...logTools, ...securityTools, ...cleanupTools, ...recoveryTools, ...integrationTools, ...orchestrationTools, ...transformTools, ...assetTools, ...execTools, ...buildArtifactTools, ...integrationControlTools, ...taskControlTools] as unknown as ToolDefinition[]) registerTool(t);
+  for (const [cat, list] of CATALOGS) for (const t of list as unknown as ToolDefinition[]) { registerTool(t); toolCatalog.set(t.name, cat); }
   registerCanonicalAliases();
   loaded = true;
   return allTools();
