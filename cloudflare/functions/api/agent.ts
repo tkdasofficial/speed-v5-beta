@@ -51,10 +51,3 @@ export async function agentResume(raw: unknown) {
   const t = await createTaskFor(user.id, { type: "ai_agent", projectId: run.project_id, idempotencyKey: `resume-${id}`, payload: { prompt: run.task_text, model: "speed", depth: "balanced", plan: true, parentRunId: id, resumeCheckpoint: (cp as { checkpoint_id?: string } | null)?.checkpoint_id ?? null } });
   return { runId: (t as { id: string }).id, parentRunId: id };
 }
-/** Agent Tool Registry (metadata only; no secrets). */
-export async function agentTools() {
-  await me();
-  const { buildRegistry, validateRegistry } = await import("../../agent/registry");
-  const entries = buildRegistry();
-  return { validation: validateRegistry(entries), tools: entries };
-}
